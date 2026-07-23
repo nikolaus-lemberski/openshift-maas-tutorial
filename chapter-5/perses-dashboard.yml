@@ -1,0 +1,254 @@
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: maas-overview
+  namespace: ai-models
+  annotations:
+    perses.dev/tags: "maas,openshift-ai,chargeback,rate-limiting"
+spec:
+  config:
+    display:
+      name: "MaaS Overview"
+      description: "Token consumption, API requests, rate limiting, and model performance for OpenShift AI Models as a Service"
+    variables:
+      - kind: ListVariable
+        spec:
+          name: interval
+          display:
+            name: Rate Interval
+          allowAllValue: false
+          allowMultiple: false
+          plugin:
+            kind: StaticListVariable
+            spec:
+              values:
+                - label: 1m
+                  value: 1m
+                - label: 5m
+                  value: 5m
+                - label: 15m
+                  value: 15m
+          defaultValue: 5m
+    panels:
+      totalTokensStat:
+        kind: Panel
+        spec:
+          display:
+            name: "Total Tokens Consumed"
+            description: "Total token consumption across all API keys (billing metric)"
+          plugin:
+            kind: StatChart
+            spec:
+              calculation: last
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(authorized_hits)"
+      totalRequestsStat:
+        kind: Panel
+        spec:
+          display:
+            name: "Total API Requests"
+            description: "Total successful API requests through the gateway"
+          plugin:
+            kind: StatChart
+            spec:
+              calculation: last
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(authorized_calls)"
+      rateLimitRejectionsStat:
+        kind: Panel
+        spec:
+          display:
+            name: "Rate Limit Rejections"
+            description: "Total 429 responses from rate limiting"
+          plugin:
+            kind: StatChart
+            spec:
+              calculation: last
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(limited_calls)"
+      tokensByApiKey:
+        kind: Panel
+        spec:
+          display:
+            name: "Tokens by API Key"
+            description: "Token consumption broken down by subscription / API key"
+          plugin:
+            kind: BarChart
+            spec:
+              calculation: last
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(authorized_hits) by (app_id)"
+                    seriesNameFormat: "{{app_id}}"
+      rateLimitRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Rate Limit Rejections (rate)"
+            description: "Rate of 429 rejections over time"
+          plugin:
+            kind: TimeSeriesChart
+            spec: {}
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(rate(limited_calls[$interval]))"
+                    seriesNameFormat: "429 rejections/s"
+      authorizedRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Authorized vs Rate Limited (rate)"
+            description: "Authorized requests vs rate-limited requests over time"
+          plugin:
+            kind: TimeSeriesChart
+            spec: {}
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(rate(authorized_calls[$interval]))"
+                    seriesNameFormat: "Authorized"
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(rate(limited_calls[$interval]))"
+                    seriesNameFormat: "Rate Limited"
+      ttft:
+        kind: Panel
+        spec:
+          display:
+            name: "Time To First Token (p95)"
+            description: "95th percentile time to first token by model"
+          plugin:
+            kind: TimeSeriesChart
+            spec: {}
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket[$interval])) by (le, model_name))"
+                    seriesNameFormat: "{{model_name}}"
+      tokenRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Token Consumption (rate)"
+            description: "Rate of token consumption over time by API key"
+          plugin:
+            kind: TimeSeriesChart
+            spec: {}
+          queries:
+            - kind: TimeSeriesQuery
+              spec:
+                plugin:
+                  kind: PrometheusTimeSeriesQuery
+                  spec:
+                    query: "sum(rate(authorized_hits[$interval])) by (app_id)"
+                    seriesNameFormat: "{{app_id}}"
+    layouts:
+      - kind: Grid
+        spec:
+          display:
+            title: "Summary"
+            collapse:
+              open: true
+          items:
+            - x: 0
+              y: 0
+              width: 8
+              height: 4
+              content:
+                $ref: "#/spec/panels/totalTokensStat"
+            - x: 8
+              y: 0
+              width: 8
+              height: 4
+              content:
+                $ref: "#/spec/panels/totalRequestsStat"
+            - x: 16
+              y: 0
+              width: 8
+              height: 4
+              content:
+                $ref: "#/spec/panels/rateLimitRejectionsStat"
+      - kind: Grid
+        spec:
+          display:
+            title: "Token Consumption & Chargeback"
+            collapse:
+              open: true
+          items:
+            - x: 0
+              y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/tokensByApiKey"
+            - x: 12
+              y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/tokenRate"
+      - kind: Grid
+        spec:
+          display:
+            title: "Rate Limiting"
+            collapse:
+              open: true
+          items:
+            - x: 0
+              y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/authorizedRate"
+            - x: 12
+              y: 0
+              width: 12
+              height: 8
+              content:
+                $ref: "#/spec/panels/rateLimitRate"
+      - kind: Grid
+        spec:
+          display:
+            title: "Model Performance"
+            collapse:
+              open: true
+          items:
+            - x: 0
+              y: 0
+              width: 24
+              height: 8
+              content:
+                $ref: "#/spec/panels/ttft"
+    duration: 1h

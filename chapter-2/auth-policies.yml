@@ -1,0 +1,28 @@
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: standard-access
+  namespace: models-as-a-service
+spec:
+  modelRefs:
+    - name: llama-3-8b
+      namespace: ai-models
+  subjects:
+    groups:
+      - name: department-a
+    users: []
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: limited-access
+  namespace: models-as-a-service
+spec:
+  modelRefs:
+    - name: llama-3-8b
+      namespace: ai-models
+  subjects:
+    groups:
+      - name: department-b
+    users: []

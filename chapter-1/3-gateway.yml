@@ -1,0 +1,38 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: maas-default-gateway
+  namespace: openshift-ingress
+  annotations:
+    security.opendatahub.io/authorino-tls-bootstrap: "true"
+    opendatahub.io/managed: "false"
+  labels:
+    app.kubernetes.io/name: maas-gateway
+    istio.io/rev: openshift-gateway
+    kuadrant.io/gateway: "true"
+spec:
+  gatewayClassName: ${GW_CLASS}
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: gw-options
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All
+  - name: https
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - group: ""
+        kind: Secret
+        name: maas-gw-service-tls
+    allowedRoutes:
+      namespaces:
+        from: All

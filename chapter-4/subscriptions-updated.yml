@@ -1,0 +1,41 @@
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: standard-plan
+  namespace: models-as-a-service
+spec:
+  priority: 50
+  owner:
+    groups:
+      - name: department-a
+    users: []
+  modelRefs:
+    - name: llama-3-8b
+      namespace: ai-models
+      tokenRateLimits:
+        - limit: 50000
+          window: 1m
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: limited-plan
+  namespace: models-as-a-service
+spec:
+  priority: 10
+  owner:
+    groups:
+      - name: department-b
+    users: []
+  modelRefs:
+    - name: llama-3-8b
+      namespace: ai-models
+      tokenRateLimits:
+        - limit: 2000
+          window: 1m
+    - name: qwen3-4b
+      namespace: ai-models
+      tokenRateLimits:
+        - limit: 1000
+          window: 1m

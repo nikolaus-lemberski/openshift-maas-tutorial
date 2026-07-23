@@ -1,0 +1,30 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  annotations:
+    opendatahub.io/connections: qwen3-4b
+    opendatahub.io/hardware-profile-name: gpu-profile
+    opendatahub.io/hardware-profile-namespace: redhat-ods-applications
+    opendatahub.io/model-type: generative
+    openshift.io/display-name: qwen3-4b
+  labels:
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/genai-asset: "true"
+  name: qwen3-4b
+  namespace: ai-models
+spec:
+  model:
+    uri: oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b
+  replicas: 1
+  template:
+    containers:
+    - name: kserve-container
+      args:
+      - --dtype=half
+      - --max-model-len=8192
+      - --gpu-memory-utilization=0.95
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"

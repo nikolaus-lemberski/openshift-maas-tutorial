@@ -1,0 +1,9 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: qwen3-4b
+  namespace: ai-models
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: qwen3-4b
