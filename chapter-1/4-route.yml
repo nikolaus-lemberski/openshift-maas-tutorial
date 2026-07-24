@@ -13,5 +13,5 @@ spec:
     termination: reencrypt
   to:
     kind: Service
-    name: maas-default-gateway-${GW_CLASS}
+    name: maas-default-gateway-$GW_CLASS
     weight: 100

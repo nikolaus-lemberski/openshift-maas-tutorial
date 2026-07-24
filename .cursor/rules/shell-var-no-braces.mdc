@@ -1,0 +1,41 @@
+---
+description: Avoid curly braces around shell variables in copy-pasteable tutorial commands
+globs: **/*.md,**/*.yml,**/*.yaml,**/*.sh
+alwaysApply: false
+---
+
+# No Curly Braces on Shell Variables
+
+This is a tutorial repo — every shell command and manifest is meant to be
+copy-pasted verbatim by a reader. Some Mac apps/terminals mangle `${VAR}`
+during copy-paste (inserting stray backslashes before the braces), silently
+breaking variable expansion and producing confusing empty/broken output.
+
+Use the bare `$VAR` form instead of `${VAR}` wherever the shell doesn't
+require braces to disambiguate.
+
+```bash
+# BAD
+curl -H "Authorization: Bearer $MAAS_API_KEY" https://${ROUTE_HOST}/maas-api/v1/models
+
+# GOOD
+curl -H "Authorization: Bearer $MAAS_API_KEY" https://$ROUTE_HOST/maas-api/v1/models
+```
+
+This applies to shell commands in `README.md` code blocks and to
+`envsubst`-templated YAML manifests (`envsubst` supports both `$VAR` and
+`${VAR}` syntax, so switching to bare `$VAR` is safe).
+
+## When braces are still required — keep them
+
+Only use `${VAR}` when the shell genuinely needs it:
+
+- Parameter expansion with an operator, e.g. `${VAR:-default}`, `${VAR:?err}`
+- The variable is immediately followed by an identifier character
+  (letter/digit/underscore) that would otherwise merge into the name, e.g.
+  `${VAR}_suffix` or `${VAR}text`
+
+Scripts that live on disk and are executed directly (e.g. `./verify.sh`)
+rather than copy-pasted are not affected by this issue and don't need to be
+rewritten just for this rule — but new code in them should still prefer
+`$VAR` unless one of the exceptions above applies.

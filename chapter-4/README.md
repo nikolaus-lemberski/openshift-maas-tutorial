@@ -33,13 +33,13 @@ List available models:
 
 ```bash
 curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
-  https://${ROUTE_HOST}/maas-api/v1/models | jq
+  https://$ROUTE_HOST/maas-api/v1/models | jq
 ```
 
 Send a test request:
 
 ```bash
-curl -s -k -X POST https://${ROUTE_HOST}/ai-models/llama-3-8b/v1/chat/completions \
+curl -s -k -X POST https://$ROUTE_HOST/ai-models/llama-3-8b/v1/chat/completions \
   -H "Authorization: Bearer $MAAS_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -112,7 +112,7 @@ Test that you can see the Qwen model:
 ```bash
 export MAAS_API_KEY="sk-oai-..."  # paste your new key
 curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
-  https://${ROUTE_HOST}/maas-api/v1/models | jq
+  https://$ROUTE_HOST/maas-api/v1/models | jq
 ```
 
 You should see `qwen3-4b` listed. A `standard-plan` key would only show `llama-3-8b`.

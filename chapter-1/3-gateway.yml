@@ -11,7 +11,7 @@ metadata:
     istio.io/rev: openshift-gateway
     kuadrant.io/gateway: "true"
 spec:
-  gatewayClassName: ${GW_CLASS}
+  gatewayClassName: $GW_CLASS
   infrastructure:
     parametersRef:
       group: ""

@@ -190,7 +190,7 @@ Capture the external Route URL and inject it into the Dashboard:
 
 ```bash
 export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-oc set env deployment/rhods-dashboard -n redhat-ods-applications MAAS_API_URL=https://${ROUTE_HOST}/maas-api
+oc set env deployment/rhods-dashboard -n redhat-ods-applications MAAS_API_URL=https://$ROUTE_HOST/maas-api
 ```
 
 Wait for the Dashboard to restart with the new variable (this may take 1–2 minutes):
