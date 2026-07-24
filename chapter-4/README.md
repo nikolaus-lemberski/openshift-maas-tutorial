@@ -2,18 +2,6 @@
 
 With the model deployed and governance active, it's time to generate API keys, test access, and expand the catalog with a second model that only `department-b` can use.
 
-## API Key Security
-
-By default, users can create permanent API keys. Enforce a 90-day maximum lifetime:
-
-```bash
-oc patch tenant default-tenant -n models-as-a-service \
-  --type merge \
-  -p '{"spec":{"apiKeys":{"maxExpirationDays":90}}}'
-```
-
-> **Important:** API keys capture a snapshot of the user's group memberships at creation time. If a user is later removed from a group, their existing keys **continue to work** until revoked or expired. Always revoke keys after group changes.
-
 ## Step 1: Generate an API Key
 
 1. In the OpenShift AI Dashboard, go to **Gen AI Studio → API Keys**
@@ -39,88 +27,201 @@ curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
 Send a test request:
 
 ```bash
-curl -s -k -X POST https://$ROUTE_HOST/ai-models/llama-3-8b/v1/chat/completions \
+curl -s -k -X POST https://$ROUTE_HOST/ai-models/granite-2b/v1/chat/completions \
   -H "Authorization: Bearer $MAAS_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "llama-3-8b",
+    "model": "granite-2b",
     "messages": [{"role": "user", "content": "Say hello!"}],
     "max_tokens": 50
   }' | jq
 ```
 
-## Step 3: Deploy the Second Model (Qwen3-4b)
+## Step 3: Deploy the Second Model (TinyLlama)
 
-### Free the GPU
-
-If your lab has a single GPU, scale down Llama first:
+Thanks to GPU time-slicing (configured in Chapter 1), both models run simultaneously on the single GPU — no need to scale anything down.
 
 ```bash
-oc patch llminferenceservice llama-3-8b -n ai-models --type=merge \
-  -p '{"spec":{"replicas":0}}'
-```
-
-Wait for the GPU to be released. Watch the workload deployment specifically, not all pods in the namespace:
-
-```bash
-oc get deployment llama-3-8b-kserve -n ai-models -w
-```
-
-> **Note:** `LLMInferenceService` also runs a separate `*-router-scheduler` pod (routing/scheduling only). It keeps running and does **not** hold a GPU, so seeing it stay `Running` is expected and not a sign the scale-down failed. You can confirm the GPU is free with:
->
-> ```bash
-> oc describe nodes | grep -A2 "Allocated resources" 
-> ```
-
-### Deploy Qwen
-
-```bash
-oc apply -f chapter-4/qwen-data-connection.yml
-oc apply -f chapter-4/qwen-inference-service.yml
-oc apply -f chapter-4/qwen-maas-model-ref.yml
+oc apply -f chapter-4/tinyllama-data-connection.yml
+oc apply -f chapter-4/tinyllama-inference-service.yml
+oc apply -f chapter-4/tinyllama-maas-model-ref.yml
 ```
 
 Monitor deployment:
 
 ```bash
-oc get llminferenceservice qwen3-4b -n ai-models -w
+oc get llminferenceservice tinyllama -n ai-models -w
 ```
 
-## Step 4: Grant department-b Access to Qwen
+Verify both models are running:
 
-The Qwen model is deployed but no one has access yet. Update the subscriptions and auth policies to give `department-b` access to Qwen while keeping `department-a` restricted to Llama only:
+```bash
+oc get llminferenceservice -n ai-models
+```
+
+Expected output — both models `Ready`:
+
+```
+NAME         READY   AGE
+granite-2b   True    30m
+tinyllama    True    2m
+```
+
+## Step 4: Grant department-b Access to TinyLlama
+
+The TinyLlama model is deployed but no one has access yet. Two resources need updating — the **MaaSSubscription** (token quotas) and the **MaaSAuthPolicy** (network access). Both must reference a model for a group to actually reach it.
+
+### Before (Chapter 2 setup)
+
+Both departments can only reach Granite:
+
+```
+                        ┌──────────────┐
+                        │  granite-2b  │
+                        └──────┬───────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                                 │
+   ┌──────────┴──────────┐          ┌───────────┴──────────┐
+   │   standard-plan     │          │    limited-plan       │
+   │   50,000 tok/min    │          │    2,000 tok/min      │
+   └──────────┬──────────┘          └───────────┬──────────┘
+              │                                 │
+   ┌──────────┴──────────┐          ┌───────────┴──────────┐
+   │   standard-access   │          │    limited-access     │
+   │   (auth policy)     │          │    (auth policy)      │
+   └──────────┬──────────┘          └───────────┬──────────┘
+              │                                 │
+     ┌────────┴────────┐              ┌─────────┴────────┐
+     │  department-a   │              │   department-b   │
+     └─────────────────┘              └──────────────────┘
+```
+
+### After (this step)
+
+`department-b` gains access to TinyLlama with its own rate limit. `department-a` stays unchanged:
+
+```
+          ┌──────────────┐              ┌──────────────┐
+          │  granite-2b  │              │   tinyllama   │
+          └──────┬───────┘              └──────┬───────┘
+                 │                             │
+    ┌────────────┼──────────────┬──────────────┘
+    │            │              │
+    │   ┌────────┴──────────┐   │
+    │   │   limited-plan    │   │
+    │   │  granite: 2k t/m  │   │
+    │   │  tiny: 1k tok/m   │   │
+    │   └────────┬──────────┘   │
+    │            │              │
+    │   ┌────────┴──────────┐   │
+    │   │  limited-access   │   │
+    │   │  (auth policy)    │   │
+    │   └────────┬──────────┘   │
+    │            │              │
+    │   ┌────────┴────────┐     │
+    │   │  department-b   │     │
+    │   └─────────────────┘     │
+    │                           │
+    │  ┌─────────────────────┐  │
+    │  │   standard-plan     │  │
+    │  │  granite: 50k t/m   │  │
+    │  │  (no tiny access)   │  │
+    │  └─────────┬───────────┘  │
+    │            │              │
+    │  ┌─────────┴───────────┐  │
+    │  │  standard-access    │  │
+    │  │  (auth policy)      │  │
+    │  └─────────┬───────────┘  │
+    │            │              │
+    │  ┌─────────┴─────────┐    │
+    │  │   department-a    │    │
+    │  └───────────────────┘    │
+    │                           │
+```
+
+### What exactly changes
+
+| Resource | What changed |
+|---|---|
+| `limited-plan` (subscription) | Added `tinyllama` model ref with 1,000 tok/min limit |
+| `limited-access` (auth policy) | Added `tinyllama` to `modelRefs` so traffic is allowed through the gateway |
+| `standard-plan` | **No change** — department-a still only sees Granite |
+| `standard-access` | **No change** |
+
+### Apply the updates
 
 ```bash
 oc apply -f chapter-4/subscriptions-updated.yml
 oc apply -f chapter-4/auth-policies-updated.yml
 ```
 
-> **Note:** `department-a` (standard-access) keeps access to `llama-3-8b` only. `department-b` (limited-access) now has access to **both** `llama-3-8b` and `qwen3-4b`.
+> **Why does the "limited" plan get more models?** The names `standard` and `limited` refer to the *token budget*, not the model catalog. `department-b` gets a lower rate limit (2,000 vs 50,000 tokens/min on Granite) but access to an additional model. In a real environment you'd name plans to match your organization's structure.
 
 ## Step 5: Test Selective Access
 
-Switch your user to `department-b` to verify the governance works:
+The goal: prove that the gateway enforces per-group model visibility.
+
+```
+  ┌──────────────────┐          ┌──────────────────┐
+  │   department-a   │          │   department-b   │
+  │ (standard-plan)  │          │  (limited-plan)  │
+  └────────┬─────────┘          └────────┬─────────┘
+           │                             │
+      Lists models:                 Lists models:
+      • granite-2b                  • granite-2b
+                                    • tinyllama
+```
+
+### Confirm department-a can only see Granite
+
+Your user is still in `department-a` with the API key from Step 2. List the models:
+
+```bash
+curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
+  https://$ROUTE_HOST/maas-api/v1/models | jq '.data[].id'
+```
+
+Expected output — only Granite:
+
+```
+"granite-2b"
+```
+
+### Move your user to department-b
 
 ```bash
 oc adm groups remove-users department-a $(oc whoami)
 oc adm groups add-users department-b $(oc whoami)
 ```
 
-Revoke your old API key in the Dashboard (**Gen AI Studio → API Keys**), then create a new one:
+### Revoke and recreate the API key
+
+API keys capture group membership at creation time, so you **must** create a new key after switching groups. Revoke the old one in the Dashboard (**Gen AI Studio → API Keys**), then:
 
 1. Click **Create API key**
 2. Name it `department-b-test`
 3. Select **limited-plan**
 4. Copy the key
 
-Test that you can see the Qwen model:
-
 ```bash
 export MAAS_API_KEY="sk-oai-..."  # paste your new key
-curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
-  https://$ROUTE_HOST/maas-api/v1/models | jq
 ```
 
-You should see `qwen3-4b` listed. A `standard-plan` key would only show `llama-3-8b`.
+### Verify department-b sees both models
+
+Run the same curl command again:
+
+```bash
+curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
+  https://$ROUTE_HOST/maas-api/v1/models | jq '.data[].id'
+```
+
+Expected output — both models now visible:
+
+```
+"granite-2b"
+"tinyllama"
+```
 
 Proceed to [Chapter 5](../chapter-5/README.md).

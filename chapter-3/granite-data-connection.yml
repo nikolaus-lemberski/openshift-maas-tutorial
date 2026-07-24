@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: qwen3-4b
+  name: granite-2b
   namespace: ai-models
   labels:
     opendatahub.io/dashboard: "true"
   annotations:
     opendatahub.io/connection-type-protocol: uri
     opendatahub.io/connection-type-ref: uri-v1
-    openshift.io/display-name: "Qwen 3 4b ModelCar (v1.0)"
+    openshift.io/display-name: "Granite 3.3 2B Instruct ModelCar"
 stringData:
-  URI: oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b
+  URI: oci://quay.io/redhat-ai-services/modelcar-catalog:granite-3.3-2b-instruct
 type: Opaque

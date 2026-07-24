@@ -36,7 +36,7 @@ oc new-project ai-models
 
 Each department gets a subscription with different token limits. The `priority` field determines which subscription takes precedence when a user belongs to multiple groups.
 
-> **Note:** The subscriptions reference `llama-3-8b` which doesn't exist yet. They will show a `Failed` phase — this is expected and resolves automatically once the model is deployed in Chapter 3.
+> **Note:** The subscriptions reference `granite-2b` which doesn't exist yet. They will show a `Failed` phase — this is expected and resolves automatically once the model is deployed in Chapter 3.
 
 ```bash
 oc apply -f chapter-2/subscriptions.yml

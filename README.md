@@ -8,6 +8,6 @@ This tutorial walks you through setting up a fully governed AI platform using Op
 |---|---|---|
 | [Chapter 1](chapter-1/README.md) | **Infrastructure Setup** | Install operators, configure gateway, enable MaaS API layer |
 | [Chapter 2](chapter-2/README.md) | **Governance** | Create groups, subscriptions, and authorization policies |
-| [Chapter 3](chapter-3/README.md) | **Model Deployment** | Deploy Llama-3-8b via the OpenShift AI Dashboard |
-| [Chapter 4](chapter-4/README.md) | **API Access & Multi-Model** | Generate API keys, deploy Qwen3-4b, configure selective access |
+| [Chapter 3](chapter-3/README.md) | **Model Deployment** | Deploy Granite 2B via LLMInferenceService |
+| [Chapter 4](chapter-4/README.md) | **API Access & Multi-Model** | Generate API keys, deploy TinyLlama, configure selective access |
 | [Chapter 5](chapter-5/README.md) | **Observability** | Rate limiting, telemetry, metrics, and Perses dashboards |

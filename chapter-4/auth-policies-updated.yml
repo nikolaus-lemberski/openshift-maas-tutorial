@@ -6,7 +6,7 @@ metadata:
   namespace: models-as-a-service
 spec:
   modelRefs:
-    - name: llama-3-8b
+    - name: granite-2b
       namespace: ai-models
   subjects:
     groups:
@@ -20,9 +20,9 @@ metadata:
   namespace: models-as-a-service
 spec:
   modelRefs:
-    - name: llama-3-8b
+    - name: granite-2b
       namespace: ai-models
-    - name: qwen3-4b
+    - name: tinyllama
       namespace: ai-models
   subjects:
     groups:

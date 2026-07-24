@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: llama-3-8b
+  name: tinyllama
   namespace: ai-models
   labels:
     opendatahub.io/dashboard: "true"
   annotations:
     opendatahub.io/connection-type-protocol: uri
     opendatahub.io/connection-type-ref: uri-v1
-    openshift.io/display-name: "Llama 8b ModelCar (v1.3)"
+    openshift.io/display-name: "TinyLlama 1.1B Chat ModelCar"
 stringData:
-  URI: oci://quay.io/redhat-ai-services/modelcar-catalog:llama-3.1-8b-instruct
+  URI: oci://quay.io/redhat-ai-services/modelcar-catalog:tinyllama-1.1b-chat-v1.0
 type: Opaque

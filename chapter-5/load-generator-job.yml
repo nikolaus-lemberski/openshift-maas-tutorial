@@ -24,7 +24,7 @@ spec:
         - name: MAAS_URL
           value: "https://$ROUTE_HOST"
         - name: MAAS_MODEL
-          value: "qwen3-4b"
+          value: "tinyllama"
         volumeMounts:
         - name: script-volume
           mountPath: /opt/scripts

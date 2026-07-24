@@ -203,6 +203,37 @@ Refresh your OpenShift AI browser window. The Gen AI Studio - API Key generation
 
 The menu options for Subscription and Authorization policies will appear in the Settings section of the OpenShift AI dashboard.
 
+### GPU Time-Slicing
+
+This tutorial deploys two small models side by side on a single GPU. By default Kubernetes treats each physical GPU as a single schedulable resource, so only one model pod could claim it. GPU time-slicing makes the node advertise 2 virtual GPUs, allowing both pods to be scheduled and share the physical GPU's memory and compute.
+
+Apply the time-slicing ConfigMap:
+
+```bash
+oc apply -f chapter-1/gpu-time-slicing.yml
+```
+
+Patch the ClusterPolicy to reference it:
+
+```bash
+oc patch clusterpolicy gpu-cluster-policy --type merge \
+  -p '{"spec":{"devicePlugin":{"config":{"name":"time-slicing-config","default":"l4"}}}}'
+```
+
+Wait for the device plugin pod to restart (this takes ~30 seconds):
+
+```bash
+oc rollout status daemonset/nvidia-device-plugin-daemonset -n nvidia-gpu-operator --timeout=120s
+```
+
+Verify the node now advertises 2 GPUs:
+
+```bash
+oc get node -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}'
+```
+
+Expected output: `2`
+
 ### Verify script
 
 Run the verification script to confirm every component is healthy:

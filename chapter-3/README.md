@@ -1,6 +1,6 @@
 # Chapter 3: Deploying the First Model
 
-With governance in place, it's time to deploy a model. You'll deploy **Llama-3-8b** into the `ai-models` namespace using the `LLMInferenceService` CRD (llm-d distributed inference).
+With governance in place, it's time to deploy a model. You'll deploy **Granite 3.3 2B Instruct** into the `ai-models` namespace using the `LLMInferenceService` CRD (llm-d distributed inference).
 
 Key points:
 - Models **must** use `LLMInferenceService` to integrate with MaaS governance — legacy KServe `InferenceService` bypasses MaaS entirely
@@ -12,13 +12,13 @@ Key points:
 This stores the OCI registry location so the Dashboard can display the model:
 
 ```bash
-oc apply -f chapter-3/llama-data-connection.yml
+oc apply -f chapter-3/granite-data-connection.yml
 ```
 
 ## Step 2: Deploy the Model
 
 ```bash
-oc apply -f chapter-3/llama-inference-service.yml
+oc apply -f chapter-3/granite-inference-service.yml
 ```
 
 ## Step 3: Register with MaaS
@@ -26,15 +26,15 @@ oc apply -f chapter-3/llama-inference-service.yml
 The `MaaSModelRef` links the model to the MaaS gateway, enabling subscription-based access control:
 
 ```bash
-oc apply -f chapter-3/llama-maas-model-ref.yml
+oc apply -f chapter-3/granite-maas-model-ref.yml
 ```
 
 ## Step 4: Wait for Deployment
 
-The model takes **10–15 minutes** to pull weights and initialize. Monitor progress:
+The model takes a few minutes to pull weights and initialize. Monitor progress:
 
 ```bash
-oc get llminferenceservice llama-3-8b -n ai-models -w
+oc get llminferenceservice granite-2b -n ai-models -w
 ```
 
 You can also watch in the OpenShift AI Dashboard under **AI Hub → Models → Deployments** in the `ai-models` project.
@@ -51,7 +51,7 @@ Expected output:
 
 ```
 NAME         PHASE   ENDPOINT         HTTPROUTE       GATEWAY           AGE
-llama-3-8b   Ready   http://maas...   llama-3-8b...   maas-default...   5m
+granite-2b   Ready   http://maas...   granite-2b...   maas-default...   5m
 ```
 
 Check that subscriptions are now active:

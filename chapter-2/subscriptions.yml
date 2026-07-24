@@ -11,7 +11,7 @@ spec:
       - name: department-a
     users: []
   modelRefs:
-    - name: llama-3-8b
+    - name: granite-2b
       namespace: ai-models
       tokenRateLimits:
         - limit: 50000
@@ -29,7 +29,7 @@ spec:
       - name: department-b
     users: []
   modelRefs:
-    - name: llama-3-8b
+    - name: granite-2b
       namespace: ai-models
       tokenRateLimits:
         - limit: 2000

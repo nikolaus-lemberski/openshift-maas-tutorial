@@ -14,7 +14,7 @@ data:
 
     api_key = os.getenv("MAAS_API_KEY")
     base_url = os.getenv("MAAS_URL")
-    model = os.getenv("MAAS_MODEL", "qwen3-4b")
+    model = os.getenv("MAAS_MODEL", "tinyllama")
 
     url = f"{base_url}/ai-models/{model}/v1/chat/completions"
 
