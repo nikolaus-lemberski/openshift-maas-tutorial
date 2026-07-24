@@ -50,8 +50,8 @@ oc get maasmodelref -n ai-models
 Expected output:
 
 ```
-NAME         MODELREF_KIND         MODELREF_NAME   READY   AGE
-llama-3-8b   LLMInferenceService   llama-3-8b      True    5m
+NAME         PHASE   ENDPOINT         HTTPROUTE       GATEWAY           AGE
+llama-3-8b   Ready   http://maas...   llama-3-8b...   maas-default...   5m
 ```
 
 Check that subscriptions are now active:

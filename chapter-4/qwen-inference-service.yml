@@ -18,7 +18,7 @@ spec:
   replicas: 1
   template:
     containers:
-    - name: kserve-container
+    - name: main
       args:
       - --dtype=half
       - --max-model-len=8192
@@ -28,3 +28,10 @@ spec:
           nvidia.com/gpu: "1"
         requests:
           nvidia.com/gpu: "1"
+  router:
+    gateway:
+      refs:
+      - name: maas-default-gateway
+        namespace: openshift-ingress
+    route: {}
+    scheduler: {}
