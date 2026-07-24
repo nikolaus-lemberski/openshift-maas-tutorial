@@ -49,7 +49,7 @@ The Gateway is the single entry point for all model inference traffic. Requests 
 
 #### TLS certificate
 
-Apply a ConfigMap that tells the Gateway controller to use a **ClusterIP** service (instead of a cloud LoadBalancer) and to auto-provision a TLS certificate via the OpenShift service-ca operator. We use ClusterIP because we will expose traffic through an OpenShift Route in the next step.
+Apply a ConfigMap that tells the Gateway controller to use a **ClusterIP** service (instead of a cloud LoadBalancer) and to auto-provision a TLS certificate via the OpenShift service-ca operator. We use ClusterIP because we will expose traffic through an OpenShift Route in the next step. The ConfigMap also raises the Envoy proxy memory limit to 2Gi — the default 1Gi is not enough once Kuadrant's Wasm policy filters are loaded.
 
 ```bash
 oc apply -f chapter-1/2-gw-service-tls-cm.yml
@@ -212,6 +212,36 @@ Run the verification script to confirm every component is healthy:
 ```
 
 It checks the OpenShift version, operator CSVs, Kuadrant readiness, Llama Stack state, user workload monitoring, the database secret, Gateway programming status, and KServe — printing a pass/fail for each.
+
+---
+
+## Troubleshooting: OpenShift AI Dashboard Unavailable
+
+If the OpenShift AI Dashboard stops loading (while the OpenShift Console still works), the most likely cause is the Istio gateway proxy pods being **OOMKilled**. Kuadrant's Wasm policy filters consume more memory than the default 1Gi limit allows.
+
+Check the gateway pods:
+
+```bash
+oc get pods -n openshift-ingress -l 'gateway.networking.k8s.io/gateway-name'
+```
+
+If you see `CrashLoopBackOff`, describe the pod to confirm `OOMKilled`:
+
+```bash
+oc get pods -n openshift-ingress -l 'gateway.networking.k8s.io/gateway-name' -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].lastState.terminated.reason}{"\n"}{end}'
+```
+
+**Fix:** Increase the memory limit on both gateway infrastructure ConfigMaps. The `gw-options` ConfigMap applied in this chapter already includes a 2Gi deployment override. For the `data-science-gateway-config` (managed by the OpenShift AI platform operator), apply the same override:
+
+```bash
+oc patch configmap data-science-gateway-config -n openshift-ingress --type merge -p '{"data":{"deployment":"spec:\n  template:\n    spec:\n      containers:\n      - name: istio-proxy\n        resources:\n          limits:\n            cpu: \"2\"\n            memory: 2Gi\n          requests:\n            cpu: 100m\n            memory: 128Mi\n"}}'
+```
+
+Then restart the affected gateway deployments to pick up the new limits:
+
+```bash
+oc rollout restart deployment -n openshift-ingress -l 'gateway.istio.io/managed'
+```
 
 ---
 

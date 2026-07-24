@@ -60,11 +60,17 @@ oc patch llminferenceservice llama-3-8b -n ai-models --type=merge \
   -p '{"spec":{"replicas":0}}'
 ```
 
-Wait for the GPU to be released:
+Wait for the GPU to be released. Watch the workload deployment specifically, not all pods in the namespace:
 
 ```bash
-oc get pods -n ai-models -w
+oc get deployment llama-3-8b-kserve -n ai-models -w
 ```
+
+> **Note:** `LLMInferenceService` also runs a separate `*-router-scheduler` pod (routing/scheduling only). It keeps running and does **not** hold a GPU, so seeing it stay `Running` is expected and not a sign the scale-down failed. You can confirm the GPU is free with:
+>
+> ```bash
+> oc describe nodes | grep -A2 "Allocated resources" 
+> ```
 
 ### Deploy Qwen
 
