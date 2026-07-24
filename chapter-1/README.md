@@ -10,11 +10,17 @@
 
 ## Enabling MaaS
 
+Models-as-a-Service (MaaS) exposes LLMs through managed API endpoints with subscription-based governance — token quotas, rate limits, and API key authentication. Setting it up requires a policy engine, an API gateway, a database, and a few OpenShift AI feature flags. The sections below walk through each component.
+
 ### Red Hat Connectivity Link Operator
+
+MaaS relies on the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) for routing and policy enforcement. [Red Hat Connectivity Link](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.0/html-single/introduction_to_connectivity_link/index) (built on the [Kuadrant](https://kuadrant.io/) project) is the supported Gateway API provider — it supplies authentication, authorization, and rate-limiting policies that MaaS attaches to model endpoints.
 
 ```bash
 oc apply -f chapter-1/0-connectivity-link.yml
 ```
+
+This creates the `kuadrant-system` namespace, an OperatorGroup, and a Subscription that installs the operator from the Red Hat catalog.
 
 Wait for the operator to be ready:
 
@@ -24,6 +30,8 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n kuadrant-system -l ope
 ```
 
 ### Kuadrant
+
+With the operator installed, create a Kuadrant instance. This deploys the control-plane components — [Authorino](https://github.com/Kuadrant/authorino) (auth) and [Limitador](https://github.com/Kuadrant/limitador) (rate limiting) — that enforce policies on Gateway API resources.
 
 ```bash
 oc apply -f chapter-1/1-kuadrant.yml
@@ -37,19 +45,27 @@ oc wait --for=condition=Ready kuadrant/kuadrant -n kuadrant-system --timeout=120
 
 ### Gateway
 
-TLS certificate
+The Gateway is the single entry point for all model inference traffic. Requests flow through it before reaching any model server, so every MaaS policy (auth, rate limits) is enforced in one place.
+
+#### TLS certificate
+
+Apply a ConfigMap that tells the Gateway controller to use a **ClusterIP** service (instead of a cloud LoadBalancer) and to auto-provision a TLS certificate via the OpenShift service-ca operator. We use ClusterIP because we will expose traffic through an OpenShift Route in the next step.
 
 ```bash
 oc apply -f chapter-1/2-gw-service-tls-cm.yml
 ```
 
-Get the Gateway class
+#### Get the Gateway class
+
+Look up the GatewayClass that is backed by the OpenShift gateway controller. This name varies by cluster, so we capture it dynamically.
 
 ```bash
 export GW_CLASS=$(oc get gatewayclass -o custom-columns=NAME:.metadata.name,CTRL:.spec.controllerName --no-headers | grep "openshift.io/gateway-controller" | awk '{print $1}' | head -n 1)
 ```
 
-Deploy the Gateway
+#### Deploy the Gateway
+
+Create the Gateway with HTTP (80) and HTTPS (443) listeners that accept routes from all namespaces. The `kuadrant.io/gateway: "true"` label tells Kuadrant to watch this Gateway for policy attachments, and the `security.opendatahub.io/authorino-tls-bootstrap: "true"` annotation triggers automatic EnvoyFilter creation so the Gateway trusts Authorino's TLS certificate.
 
 ```bash
 envsubst < chapter-1/3-gateway.yml | oc apply -f -
@@ -57,13 +73,15 @@ envsubst < chapter-1/3-gateway.yml | oc apply -f -
 
 ### Route
 
-Expose Gateway via Route (as we do not use **DNSPolicy** and do not have MetalLB to create a cloud **Loadbalancer**)
+In environments without **DNSPolicy** or MetalLB there is no external load balancer to assign an IP to the Gateway's ClusterIP service. An OpenShift Route bridges the gap by fronting the Gateway through the default OpenShift Router (HAProxy), giving it a publicly reachable hostname with re-encrypted TLS.
 
 ```bash
 envsubst < chapter-1/4-route.yml | oc apply -f -
 ```
 
 ### Configure Authorino
+
+Authorino is the authorization engine that validates API keys and enforces access policies on every inference request. It needs to make outbound HTTPS calls to the MaaS API (for API key validation and metadata lookups), so it must trust the cluster's internal CA certificates.
 
 Set SSL environment variables for outbound communication:
 
@@ -73,14 +91,14 @@ SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
 REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
 ```
 
-Generate the TLS certificate for Authorino:
+Generate a TLS certificate for Authorino's own authorization endpoint. The `serving-cert-secret-name` annotation tells the OpenShift service-ca operator to issue a signed certificate and store it in the named Secret:
 
 ```bash
 oc annotate service authorino-authorino-authorization -n kuadrant-system \
 service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite
 ```
 
-Patch the Authorino resource to enable the TLS listener:
+Patch the Authorino resource to enable the TLS listener, so the Gateway ↔ Authorino channel is encrypted:
 
 ```bash
 oc patch authorino authorino -n kuadrant-system --type=merge --patch '
@@ -100,11 +118,20 @@ oc patch authorino authorino -n kuadrant-system --type=merge --patch '
 
 ### MaaS API Database
 
+MaaS needs a PostgreSQL database to persist subscriptions, API keys, authorization policies, and usage-tracking data. This deploys a simple single-replica Postgres instance in the `redhat-ods-applications` namespace and creates a Secret (`maas-db-config`) with the connection string that the MaaS API reads at startup.
+
 ```bash
 oc apply -f chapter-1/5-maas-db.yml
 ```
 
 ### MaaS API Layer
+
+Enable the two DataScienceCluster components that power MaaS:
+
+- **`llamastackoperator`** — deploys the Llama Stack Operator, which manages agentic and RAG workflow components (inference, embeddings, vector stores).
+- **`kserve.modelsAsService`** — deploys the MaaS controller, which reconciles MaaS custom resources (Tenant, MaaSSubscription, MaaSAuthPolicy, MaaSModelRef) and wires up the API layer.
+
+Both default to `Removed`; setting them to `Managed` opts in.
 
 ```bash
 oc patch datasciencecluster default-dsc --type=merge -p '{
@@ -125,11 +152,19 @@ oc patch datasciencecluster default-dsc --type=merge -p '{
 
 ### User Workload Monitoring
 
+OpenShift's built-in monitoring stack only scrapes platform components by default. MaaS tracks token consumption and model usage through Prometheus metrics emitted by user workloads. Enabling user workload monitoring deploys a dedicated Prometheus instance in `openshift-user-workload-monitoring` that scrapes ServiceMonitor/PodMonitor targets in user namespaces — making those metrics available for the MaaS observability dashboard.
+
 ```bash
 oc apply -f chapter-1/6-user-workload-monitoring.yml
 ```
 
 ### Enable GenAI Studio
+
+Toggle three feature flags in the OpenShift AI dashboard configuration:
+
+- **`genAiStudio`** — shows the *Gen AI Studio* menu in the left-hand navigation.
+- **`modelAsService`** — adds the MaaS interface (AI asset endpoints, API key management) inside Gen AI Studio.
+- **`maasAuthPolicies`** — surfaces the *Subscription* and *Authorization policies* settings in the admin area.
 
 ```bash
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge -p '{
@@ -145,7 +180,7 @@ oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --ty
 
 ### MaaS Routing Patch
 
-Tell the dashboard how to route traffic to the MaaS API.
+The OpenShift AI dashboard needs to know the external URL of the MaaS API so it can proxy requests from the browser. We capture the hostname of the Route created earlier and inject it as an environment variable into the dashboard Deployment.
 
 ```bash
 oc wait --for=condition=Available deployment/rhods-dashboard -n redhat-ods-applications --timeout=300s
@@ -170,11 +205,13 @@ The menu options for Subscription and Authorization policies will appear in the 
 
 ### Verify script
 
-Check if everything is set up:
+Run the verification script to confirm every component is healthy:
 
 ```bash
 ./chapter-1/7-verify-maas.sh
 ```
+
+It checks the OpenShift version, operator CSVs, Kuadrant readiness, Llama Stack state, user workload monitoring, the database secret, Gateway programming status, and KServe — printing a pass/fail for each.
 
 ---
 
