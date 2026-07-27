@@ -8,6 +8,14 @@
 - `oc` CLI logged in as a cluster admin
 - `envsubst` available locally (typically provided by `gettext`)
 
+If you installed from the Demo Platform, it ships a default Llama model in the `my-first-model` project that occupies the full GPU. Scale it down before Chapter 3 — otherwise Granite will fail to start with a GPU memory error:
+
+```bash
+oc scale deployment llama-32-3b-instruct-predictor -n my-first-model --replicas=0
+```
+
+If that deployment does not exist on your cluster, skip this step.
+
 ## Enabling MaaS
 
 Models-as-a-Service (MaaS) exposes LLMs through managed API endpoints with subscription-based governance — token quotas, rate limits, and API key authentication. Setting it up requires a policy engine, an API gateway, a database, and a few OpenShift AI feature flags. The sections below walk through each component.
@@ -25,9 +33,10 @@ This creates the `kuadrant-system` namespace, an OperatorGroup, and a Subscripti
 Wait for the operator to be ready:
 
 ```bash
-until oc get csv -n kuadrant-system 2>/dev/null | grep -q rhcl-operator; do sleep 5; done
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n kuadrant-system -l operators.coreos.com/rhcl-operator.kuadrant-system --timeout=300s
+until oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n kuadrant-system -l operators.coreos.com/rhcl-operator.kuadrant-system --timeout=10s 2>/dev/null; do sleep 5; done
 ```
+
+The loop retries until the CSV exists and reaches `Succeeded`. The operator label is not set while the CSV is still installing, so a single `oc wait` can fail with "no matching resources found" if run too early.
 
 ### Kuadrant
 
@@ -226,9 +235,10 @@ Wait for the device plugin pod to restart (this takes ~30 seconds):
 oc rollout status daemonset/nvidia-device-plugin-daemonset -n nvidia-gpu-operator --timeout=120s
 ```
 
-Verify the node now advertises 2 GPUs:
+Verify the node now advertises 2 GPUs (the device plugin may take a few seconds to update allocatable resources after restart):
 
 ```bash
+until [ "$(oc get node -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}')" = "2" ]; do sleep 5; done
 oc get node -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}'
 ```
 

@@ -4,18 +4,33 @@ With the model deployed and governance active, it's time to generate API keys, t
 
 ## Step 1: Generate an API Key
 
+**Option A — Dashboard**
+
 1. In the OpenShift AI Dashboard, go to **Gen AI Studio → API Keys**
 2. Click **Create API key**
 3. Name it `department-a-test`
 4. Select **standard-plan** from the Subscription dropdown
 5. Click **Create** and **copy the key immediately** (it starts with `sk-oai-` and is shown only once)
 
-## Step 2: Test Model Access
-
 ```bash
 export MAAS_API_KEY="sk-oai-..."  # paste your key
 export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
 ```
+
+**Option B — CLI**
+
+```bash
+export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
+export MAAS_API_KEY=$(curl -s -k -X POST https://$ROUTE_HOST/maas-api/v1/api-keys \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"department-a-test","subscription":"standard-plan"}' | jq -r .key)
+echo $MAAS_API_KEY
+```
+
+The key is shown only once — save the value before continuing.
+
+## Step 2: Test Model Access
 
 List available models:
 
@@ -197,12 +212,21 @@ oc adm groups add-users department-b $(oc whoami)
 
 ### Revoke and recreate the API key
 
-API keys capture group membership at creation time, so you **must** create a new key after switching groups. Revoke the old one in the Dashboard (**Gen AI Studio → API Keys**), then:
+API keys capture group membership at creation time, so you **must** create a new key after switching groups.
 
-1. Click **Create API key**
-2. Name it `department-b-test`
-3. Select **limited-plan**
-4. Copy the key
+**Option A — Dashboard:** Revoke the old key in **Gen AI Studio → API Keys**, then create a new one named `department-b-test` on the **limited-plan** subscription.
+
+**Option B — CLI:**
+
+```bash
+export MAAS_API_KEY=$(curl -s -k -X POST https://$ROUTE_HOST/maas-api/v1/api-keys \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"department-b-test","subscription":"limited-plan"}' | jq -r .key)
+echo $MAAS_API_KEY
+```
+
+If you used the Dashboard, paste the new key instead:
 
 ```bash
 export MAAS_API_KEY="sk-oai-..."  # paste your new key

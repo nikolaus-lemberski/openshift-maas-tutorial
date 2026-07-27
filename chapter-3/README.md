@@ -7,6 +7,16 @@ Key points:
 - A `MaaSModelRef` resource registers the model with the MaaS gateway
 - Once the model is ready, the subscriptions and auth policies from Chapter 2 activate automatically
 
+## Before you deploy
+
+If you have not already done so in Chapter 1, free the GPU by scaling down the Demo Platform's default model:
+
+```bash
+oc scale deployment llama-32-3b-instruct-predictor -n my-first-model --replicas=0
+```
+
+If that deployment does not exist, skip this step.
+
 ## Step 1: Create the Data Connection
 
 This stores the OCI registry location so the Dashboard can display the model:
