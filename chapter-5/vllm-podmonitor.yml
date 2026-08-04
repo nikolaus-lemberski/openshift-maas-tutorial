@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm-metrics
+  namespace: ai-models
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: llminferenceservice-workload
+  podMetricsEndpoints:
+    - targetPort: 8000
+      path: /metrics
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      interval: 30s

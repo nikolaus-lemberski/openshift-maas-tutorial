@@ -10,5 +10,4 @@ This tutorial walks you through setting up a fully governed AI platform using Op
 | [Chapter 2](chapter-2/README.md) | **Governance** | Create groups, subscriptions, and authorization policies |
 | [Chapter 3](chapter-3/README.md) | **Model Deployment** | Deploy Granite 2B via LLMInferenceService |
 | [Chapter 4](chapter-4/README.md) | **API Access & Multi-Model** | Generate API keys, deploy TinyLlama, configure selective access |
-| [Chapter 5](chapter-5/README.md) | **Token Rate Limiting** | See MaaS token budgets enforced at the gateway |
-| [Chapter 6](chapter-6/README.md) | **Observability** | Telemetry, metrics, load testing, and Perses dashboards |
+| [Chapter 5](chapter-5/README.md) | **Observability & Rate Limiting** | Telemetry, metrics, load testing, rate limits, and Perses dashboards |

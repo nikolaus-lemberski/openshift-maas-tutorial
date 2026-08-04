@@ -167,6 +167,59 @@ OpenShift's built-in monitoring stack only scrapes platform components by defaul
 oc apply -f chapter-1/6-user-workload-monitoring.yml
 ```
 
+### MaaS Telemetry
+
+Token rate limiting and chargeback metrics depend on Kuadrant observability and the MaaS `TelemetryPolicy`. Enable both now — before any models or subscriptions are deployed — so the gateway Wasm filters are wired correctly from the first inference request.
+
+Wait for the MaaS tenant to become ready:
+
+```bash
+oc wait --for=condition=Ready tenants.maas.opendatahub.io/default-tenant \
+  -n models-as-a-service --timeout=300s
+```
+
+Enable Limitador metric scraping:
+
+```bash
+oc patch kuadrant kuadrant -n kuadrant-system \
+  --type merge \
+  -p '{"spec":{"observability":{"enable":true}}}'
+```
+
+Enable tenant telemetry (creates the `TelemetryPolicy` on the gateway):
+
+```bash
+oc patch tenants.maas.opendatahub.io default-tenant -n models-as-a-service \
+  --type merge \
+  -p '{
+    "spec": {
+      "telemetry": {
+        "enabled": true,
+        "metrics": {
+          "captureOrganization": true,
+          "captureUser": false,
+          "captureGroup": false,
+          "captureModelUsage": true
+        }
+      }
+    }
+  }'
+```
+
+Restart the gateway so it picks up the new telemetry and rate-limit filters:
+
+```bash
+oc rollout restart deployment/maas-default-gateway-data-science-gateway-class -n openshift-ingress
+oc rollout status deployment/maas-default-gateway-data-science-gateway-class -n openshift-ingress --timeout=300s
+```
+
+Verify:
+
+```bash
+oc get podmonitor kuadrant-limitador-monitor -n kuadrant-system
+oc get telemetrypolicy maas-telemetry -n openshift-ingress
+```
+
 ### Enable GenAI Studio
 
 Toggle three feature flags in the OpenShift AI dashboard configuration:

@@ -10,6 +10,9 @@ spec:
     groups:
       - name: department-a
     users: []
+  tokenMetadata:
+    costCenter: CC-1001
+    organizationId: ORG-DEPT-A
   modelRefs:
     - name: granite-2b
       namespace: ai-models
@@ -28,6 +31,9 @@ spec:
     groups:
       - name: department-b
     users: []
+  tokenMetadata:
+    costCenter: CC-2001
+    organizationId: ORG-DEPT-B
   modelRefs:
     - name: granite-2b
       namespace: ai-models
