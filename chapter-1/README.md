@@ -8,7 +8,7 @@
 - `oc` CLI logged in as a cluster admin
 - `envsubst` available locally (typically provided by `gettext`)
 
-> [INFO]
+> [!TIP]
 > For Red Hatters: install from [Demo Platform](https://catalog.demo.redhat.com/catalog/babylon-catalog-prod?item=babylon-catalog-prod/published.openshift-ai-v3.prod&utm_source=webapp&utm_medium=share-link)
 >
 > If you installed from the Demo Platform, it ships a default Llama model in the `my-first-model` project that occupies the full GPU. Scale it down > > before Chapter 3 — otherwise Granite will fail to start with a GPU memory error: `oc scale deployment llama-32-3b-instruct-predictor -n my-first-model --replicas=0`
