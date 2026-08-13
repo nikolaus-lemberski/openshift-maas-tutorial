@@ -29,6 +29,8 @@ This tutorial walks you through setting up a fully governed AI platform using Op
           +-------------------+
 ```
 
+> Granite 2B and TinyLlama are small models chosen for the demo to keep GPU requirements low. The same gateway, governance, and observability pattern applies to production workloads with larger models.
+
 ## Tutorial Chapters
 
 | Chapter | Topic | What you'll do |
