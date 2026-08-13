@@ -48,8 +48,10 @@ curl -s -k -X POST https://$ROUTE_HOST/ai-models/granite-2b/v1/chat/completions 
   -d '{
     "model": "granite-2b",
     "messages": [{"role": "user", "content": "Say hello!"}],
-    "max_tokens": 50
-  }' | jq
+    "max_tokens": 50,
+    "stream": true,
+    "stream_options": {"include_usage": true}
+  }'
 ```
 
 ## Step 3: Deploy the Second Model (TinyLlama)

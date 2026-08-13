@@ -8,6 +8,43 @@ The platform is live — now make it observable. In this chapter you'll:
 4. Enable vLLM model server metrics for performance monitoring
 5. Deploy a Perses dashboard in the OpenShift console
 
+## Before You Begin
+
+Every curl example in this chapter uses a `department-b` API key on the `limited-plan` subscription — that's the plan this chapter tightens and rate-limits. Confirm your user is still in `department-b` from Chapter 4, Step 5:
+
+```bash
+oc get groups | grep department
+```
+
+Expected output — your username under `department-b`, not `department-a`:
+
+```
+department-a
+department-b   admin
+```
+
+If your username isn't under `department-b`, move it there:
+
+```bash
+oc adm groups remove-users department-a $(oc whoami)
+oc adm groups add-users department-b $(oc whoami)
+```
+
+API keys capture group membership at creation time, so generate a fresh key now rather than reusing an older one:
+
+```bash
+export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
+export MAAS_API_KEY=$(curl -s -k -X POST https://$ROUTE_HOST/maas-api/v1/api-keys \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"department-b-chapter5","subscription":"limited-plan"}' | jq -r .key)
+echo $MAAS_API_KEY
+```
+
+> **Getting `400 {"code":"invalid_subscription",...}`?** The MaaS API resolves `subscription` against your groups' auth policies — `standard-plan` only works for `department-a`, `limited-plan` only for `department-b`. The error means the subscription you asked for doesn't match the group you're currently in; re-check `oc get groups | grep department` above.
+
+Keep `$MAAS_API_KEY` and `$ROUTE_HOST` exported for the rest of this chapter — later steps reference "your department-b key" assuming it's already set.
+
 ## Step 1: Verify Telemetry
 
 Chapter 1 enabled Kuadrant observability and tenant telemetry on the gateway. Confirm the resources are still present before generating traffic:
@@ -75,14 +112,7 @@ oc rollout status deployment/maas-default-gateway-data-science-gateway-class -n 
 
 ### Smoke Test with curl
 
-Confirm rate limiting works from your workstation. Use your `department-b` limited-plan key from Chapter 4 — rate limits are enforced per subscription, so a `department-a` key will not hit these limits.
-
-```bash
-export MAAS_API_KEY="sk-oai-..."  # your department-b key from Chapter 4
-export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-```
-
-Send one request to consume tokens, then a second request that should be rejected:
+Confirm rate limiting works from your workstation. Use your `department-b` limited-plan key from Chapter 4 — rate limits are enforced per subscription, so a `department-a` key will not hit these limits. Send one request to consume tokens, then a second request that should be rejected:
 
 ```bash
 curl -s -k -w '\nHTTP:%{http_code}\n' \
@@ -93,7 +123,8 @@ curl -s -k -w '\nHTTP:%{http_code}\n' \
     "model": "tinyllama",
     "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
     "max_tokens": 200,
-    "stream": false
+    "stream": true,
+    "stream_options": {"include_usage": true}
   }' | tail -3
 
 curl -s -k -w '\nHTTP:%{http_code}\n' \
@@ -104,7 +135,8 @@ curl -s -k -w '\nHTTP:%{http_code}\n' \
     "model": "tinyllama",
     "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
     "max_tokens": 200,
-    "stream": false
+    "stream": true,
+    "stream_options": {"include_usage": true}
   }' | tail -1
 ```
 
@@ -123,7 +155,7 @@ for i in $(seq 1 10); do
     -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
     -H "Authorization: Bearer $MAAS_API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50,"stream":false}'
+    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50,"stream":true,"stream_options":{"include_usage":true}}'
 done | sort | uniq -c
 ```
 
@@ -178,12 +210,27 @@ If every request returns `200` and you never see a `429`:
 
    Token rate limits only apply when `auth.identity.selected_subscription_key` matches your plan. If Authorino cannot resolve the subscription, limits are silently skipped.
 
+   > **Note:** Authorino also logs `failed to evaluate CEL expression ... no such key: selected_subscription` (without `_key`) on essentially every request, for every model, even when everything works. That's a separate, benign metric-labeling expression and not evidence of a problem — only investigate further if you see errors that reference `selected_subscription_key` or `subscription-info` itself.
+
+6. **Check for a Kuadrant Wasm shim task failure** — this is the most likely cause if steps 1–5 all check out and you still only see `200`s:
+
+   ```bash
+   GW_POD=$(oc get pods -n openshift-ingress -l 'gateway.networking.k8s.io/gateway-name=maas-default-gateway' -o jsonpath='{.items[0].metadata.name}')
+   oc logs $GW_POD -n openshift-ingress --since=2m | grep "Task failed"
+   ```
+
+   If every `/v1/chat/completions` request is immediately preceded by a line like `kuadrant_wasm_shim: Task failed: Some("N")`, the gateway's rate-limiting Wasm filter is failing its async callout to Limitador on every request — token usage is never recorded, so the budget never depletes and `429` never fires. Confirmed reproducible on a completely fresh `maas-default-gateway` pod (i.e. not stale state) affecting **both** Granite and TinyLlama routes, on rhcl-operator v1.4.2. Restarting Limitador and the gateway does **not** clear it.
+
+   This is a platform bug in Kuadrant's Wasm rate-limiting shim, not something fixable via `MaaSSubscription`/`TokenRateLimitPolicy` changes. If you hit this, the token-budget and 429 behavior in the rest of this chapter cannot be demonstrated until an upstream fix or a newer `rhcl-operator` build is available — check `oc get subscription rhcl-operator -n kuadrant-system -o jsonpath='{.status.installedCSV}'` against the latest in your catalog. The remaining steps in this chapter (metrics queries, vLLM PodMonitor, Perses dashboard) are unaffected and still worth completing — the `limited_calls` panel will simply stay at zero until the underlying bug is fixed.
+
 ## Step 3: Query Metrics (Chargeback)
 
 ### Verify Prometheus Pipeline
 
+The `kuadrant-limitador-monitor` PodMonitor lives in `kuadrant-system`, a user namespace from monitoring's perspective — it's scraped by the **user workload monitoring** Prometheus enabled in Chapter 1, not the platform instance. Query `prometheus-user-workload`, not `prometheus-k8s`:
+
 ```bash
-oc exec -n openshift-monitoring sts/prometheus-k8s -c prometheus -- \
+oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c prometheus -- \
   curl -s 'http://localhost:9090/api/v1/query?query=authorized_calls' | jq
 ```
 
@@ -344,12 +391,14 @@ for i in $(seq 1 20); do
     -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
     -H "Authorization: Bearer $MAAS_API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"What is Kubernetes?"}],"max_tokens":100,"stream":false}'
+    -d '{"model":"tinyllama","messages":[{"role":"user","content":"What is Kubernetes?"}],"max_tokens":100,"stream":true,"stream_options":{"include_usage":true}}'
   sleep 2
 done
 ```
 
 You should see a mix of `200` and `429` responses. Switch back to the Perses dashboard and watch the panels update in real time.
+
+![MaaS Overview dashboard showing token consumption, API requests, and rate limit rejections](../img/perses_maas_dashboard.png)
 
 > **Tip:** Since the dashboard is a Kubernetes CR, you can also edit it interactively in the OpenShift console — changes are saved back to the `PersesDashboard` resource. Or export and edit as YAML:
 >
