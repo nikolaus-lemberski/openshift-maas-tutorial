@@ -39,7 +39,7 @@ curl -s -k -H "Authorization: Bearer $MAAS_API_KEY" \
   https://$ROUTE_HOST/maas-api/v1/models | jq
 ```
 
-Send a test request:
+Send a test request. Always set `"stream": true` — non-streaming requests return an empty body on this gateway (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)):
 
 ```bash
 curl -s -k -X POST https://$ROUTE_HOST/ai-models/granite-2b/v1/chat/completions \
@@ -49,8 +49,7 @@ curl -s -k -X POST https://$ROUTE_HOST/ai-models/granite-2b/v1/chat/completions 
     "model": "granite-2b",
     "messages": [{"role": "user", "content": "Say hello!"}],
     "max_tokens": 50,
-    "stream": true,
-    "stream_options": {"include_usage": true}
+    "stream": true
   }'
 ```
 

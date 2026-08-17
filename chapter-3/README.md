@@ -27,6 +27,8 @@ oc apply -f chapter-3/granite-data-connection.yml
 
 ## Step 2: Deploy the Model
 
+The vLLM args include `--enable-force-include-usage`, so token usage is always reported for MaaS rate limiting (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)).
+
 ```bash
 oc apply -f chapter-3/granite-inference-service.yml
 ```

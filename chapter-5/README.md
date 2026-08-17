@@ -58,7 +58,7 @@ If either resource is missing, re-run the [MaaS Telemetry](../chapter-1/README.m
 
 ## Step 2: Trigger Rate Limiting
 
-Each `MaaSSubscription` defines a per-model **token budget** — the maximum number of tokens a user can consume within a rolling time window. When the budget is exhausted the gateway returns `429 Too Many Requests` until the window resets. MaaS translates each `tokenRateLimits` entry into a Kuadrant `TokenRateLimitPolicy` on the model's HTTPRoute.
+Each `MaaSSubscription` defines a per-model **token budget** — the maximum number of tokens a user can consume within a rolling time window. When the budget is exhausted the gateway returns `429 Too Many Requests` until the window resets. MaaS translates each `tokenRateLimits` entry into a Kuadrant `TokenRateLimitPolicy` on the model's HTTPRoute. `"stream": true` is required on every request (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)).
 
 List the policies MaaS created:
 
@@ -123,8 +123,7 @@ curl -s -k -w '\nHTTP:%{http_code}\n' \
     "model": "tinyllama",
     "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
     "max_tokens": 200,
-    "stream": true,
-    "stream_options": {"include_usage": true}
+    "stream": true
   }' | tail -3
 
 curl -s -k -w '\nHTTP:%{http_code}\n' \
@@ -135,8 +134,7 @@ curl -s -k -w '\nHTTP:%{http_code}\n' \
     "model": "tinyllama",
     "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
     "max_tokens": 200,
-    "stream": true,
-    "stream_options": {"include_usage": true}
+    "stream": true
   }' | tail -1
 ```
 
@@ -155,7 +153,7 @@ for i in $(seq 1 10); do
     -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
     -H "Authorization: Bearer $MAAS_API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50,"stream":true,"stream_options":{"include_usage":true}}'
+    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50,"stream":true}'
 done | sort | uniq -c
 ```
 
@@ -391,7 +389,7 @@ for i in $(seq 1 20); do
     -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
     -H "Authorization: Bearer $MAAS_API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"What is Kubernetes?"}],"max_tokens":100,"stream":true,"stream_options":{"include_usage":true}}'
+    -d '{"model":"tinyllama","messages":[{"role":"user","content":"What is Kubernetes?"}],"max_tokens":100,"stream":true}'
   sleep 2
 done
 ```
