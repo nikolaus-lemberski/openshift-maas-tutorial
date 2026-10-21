@@ -3,8 +3,6 @@ kind: LLMInferenceService
 metadata:
   annotations:
     opendatahub.io/connections: tinyllama
-    opendatahub.io/hardware-profile-name: gpu-profile
-    opendatahub.io/hardware-profile-namespace: redhat-ods-applications
     opendatahub.io/model-type: generative
     openshift.io/display-name: tinyllama
   labels:

@@ -3,7 +3,7 @@
 With governance in place, it's time to deploy a model. You'll deploy **Granite 3.3 2B Instruct** into the `ai-models` namespace using the `LLMInferenceService` CRD (llm-d distributed inference).
 
 Key points:
-- Models **must** use `LLMInferenceService` to integrate with MaaS governance — legacy KServe `InferenceService` bypasses MaaS entirely
+- This tutorial uses `LLMInferenceService` with the MaaS gateway for governance; do not substitute a legacy `InferenceService` without configuring its MaaS integration
 - A `MaaSModelRef` resource registers the model with the MaaS gateway
 - Once the model is ready, the subscriptions and auth policies from Chapter 2 activate automatically
 
@@ -29,6 +29,8 @@ oc apply -f chapter-3/granite-data-connection.yml
 
 The vLLM args include `--enable-force-include-usage`, so token usage is always reported for MaaS rate limiting (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)).
 
+The model manifests request one `nvidia.com/gpu` directly. They do not depend on a Demo Platform hardware profile named `gpu-profile`.
+
 ```bash
 oc apply -f chapter-3/granite-inference-service.yml
 ```
@@ -43,11 +45,14 @@ oc apply -f chapter-3/granite-maas-model-ref.yml
 
 ## Step 4: Wait for Deployment
 
-The model takes a few minutes to pull weights and initialize. Monitor progress:
+The model takes a few minutes to pull weights and initialize. Wait for readiness:
 
 ```bash
-oc get llminferenceservice granite-2b -n ai-models -w
+oc wait llminferenceservice/granite-2b -n ai-models --for=condition=Ready --timeout=1200s
+oc wait maasmodelref/granite-2b -n ai-models --for=condition=Ready --timeout=300s
 ```
+
+On timeout, inspect `oc get pods -n ai-models` and `oc get events -n ai-models --sort-by=.lastTimestamp`. `Pending` can indicate insufficient GPU/CPU/memory; `ImagePullBackOff` indicates registry access or pull credentials. Stop here until both resources are ready. For continuous status, use `oc get llminferenceservice -n ai-models -w` and press Ctrl+C to stop watching.
 
 You can also watch in the OpenShift AI Dashboard under **AI Hub → Models → Deployments** in the `ai-models` project.
 
@@ -70,6 +75,10 @@ Check that subscriptions are now active:
 
 ```bash
 oc get maassubscription -n models-as-a-service
+oc wait maassubscription/standard-plan maassubscription/limited-plan \
+  -n models-as-a-service --for=condition=Ready --timeout=300s
+oc wait maasauthpolicy/standard-access maasauthpolicy/limited-access \
+  -n models-as-a-service --for=condition=Ready --timeout=300s
 ```
 
 Proceed to [Chapter 4](../chapter-4/README.md).

@@ -9,7 +9,8 @@ chapter-1/   Infrastructure setup (operators, gateway, database, MaaS API)
 chapter-2/   Governance (groups, subscriptions, auth policies)
 chapter-3/   Model deployment (Granite 2B via LLMInferenceService)
 chapter-4/   API access & multi-model (API keys, TinyLlama, selective access)
-chapter-5/   Observability & rate limiting (telemetry, metrics, Perses dashboards)
+chapter-5/   Usage & showback (embedded OpenShift AI dashboard, Technology Preview)
+chapter-6/   Observability & rate limiting (HTTP 429s, consumption, built-in AI dashboards)
 ```
 
 Each chapter has a `README.md` with prose + copy-pasteable commands and numbered YAML manifests applied in order.
@@ -29,5 +30,5 @@ Each chapter has a `README.md` with prose + copy-pasteable commands and numbered
 - Red Hat Connectivity Link / Kuadrant (Gateway API, Authorino, Limitador)
 - vLLM model servers (Granite 2B, TinyLlama)
 - PostgreSQL (MaaS API database)
-- Perses (dashboards as CRDs via Cluster Observability Operator)
+- Built-in OpenShift AI observability (COO, OpenTelemetry, AI-managed Perses backend)
 - Prometheus / Thanos Querier (metrics)

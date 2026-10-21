@@ -1,411 +1,229 @@
-# Chapter 5: Observability & Rate Limiting
+# Chapter 5: Usage & Showback Dashboard (Technology Preview)
 
-The platform is live — now make it observable. In this chapter you'll:
+Use the dashboard embedded in OpenShift AI to compare aggregate token consumption by model and subscription. Our mapping is `standard-plan` → `department-a` / `CC-1001`, and `limited-plan` → `department-b` / `CC-2001`. The dashboard filters on subscriptions, not OpenShift group names.
 
-1. Enable telemetry for token tracking
-2. Tighten token limits and trigger rate limits with curl
-3. Query metrics for chargeback
-4. Enable vLLM model server metrics for performance monitoring
-5. Deploy a Perses dashboard in the OpenShift console
+> [!NOTE]
+> MaaS showback is Technology Preview. It supports internal usage attribution and capacity planning; token metrics are not billing-grade metering or external invoices. This chapter uses the metrics-based administrator dashboard. The separate Loki-based pipeline and user-scoped dashboards are outside this walkthrough.
 
-## Before You Begin
+## Step 1: Enable the OpenShift AI Metrics Stack
 
-Every curl example in this chapter uses a `department-b` API key on the `limited-plan` subscription — that's the plan this chapter tightens and rate-limits. Confirm your user is still in `department-b` from Chapter 4, Step 5:
+Chapter 1 enabled user workload monitoring and gateway telemetry. The embedded Usage dashboard additionally queries the **OpenShift AI monitoring stack**, using metrics normalized by its OpenTelemetry collector.
 
-```bash
-oc get groups | grep department
-```
+The demo uses the built-in OpenShift AI dashboards throughout. Their backend dependencies are:
 
-Expected output — your username under `department-b`, not `department-a`:
+| Component | Purpose | Setup |
+|---|---|---|
+| **Cluster Observability Operator (COO)** | Manages the Prometheus and Perses resources used by AI observability | Install/reuse the operator below |
+| **Red Hat build of OpenTelemetry** | Collects and normalizes gateway/model metrics for the AI monitoring pipeline | Install/reuse the operator below |
+| **AI Prometheus / Thanos** | Stores and queries token, request, rejection, and model metrics | Created by the AI monitoring configuration below |
+| **AI-managed Perses backend** (`data-science-perses` in `redhat-ods-monitoring`) | Serves the built-in dashboard definitions to the OpenShift AI UI | Created by the AI monitoring configuration below |
+| **MaaS / Kuadrant telemetry** | Supplies consumption and rejection counters, with labels required by Usage | Chapter 1 plus Step 2 below |
 
-```
-department-a
-department-b   admin
-```
+COO and OpenTelemetry are still needed when using only the OpenShift AI UI. The additional OpenShift console `UIPlugin`, a second Perses server in COO's namespace, a custom `maas-overview` dashboard, and its datasource/RBAC are unnecessary for this demo. Tempo/tracing and Loki are also unnecessary for this metrics-based walkthrough.
 
-If your username isn't under `department-b`, move it there:
+Token-budget enforcement itself runs in the gateway and Kuadrant/Limitador, using the subscriptions and vLLM response usage configured in earlier chapters. The AI metrics stack displays that consumption and its `429` rejections; it does not enforce the budget.
 
-```bash
-oc adm groups remove-users department-a $(oc whoami)
-oc adm groups add-users department-b $(oc whoami)
-```
-
-API keys capture group membership at creation time, so generate a fresh key now rather than reusing an older one:
+Install Red Hat build of OpenTelemetry and the Cluster Observability Operator (COO). COO supplies the Perses backend used by the embedded dashboard. First check for existing installations:
 
 ```bash
-export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-export MAAS_API_KEY=$(curl -s -k -X POST https://$ROUTE_HOST/maas-api/v1/api-keys \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"department-b-chapter5","subscription":"limited-plan"}' | jq -r .key)
-echo $MAAS_API_KEY
+oc get subscription -A | grep -E 'opentelemetry-product|cluster-observability-operator'
 ```
 
-> **Getting `400 {"code":"invalid_subscription",...}`?** The MaaS API resolves `subscription` against your groups' auth policies — `standard-plan` only works for `department-a`, `limited-plan` only for `department-b`. The error means the subscription you asked for doesn't match the group you're currently in; re-check `oc get groups | grep department` above.
-
-Keep `$MAAS_API_KEY` and `$ROUTE_HOST` exported for the rest of this chapter — later steps reference "your department-b key" assuming it's already set.
-
-## Step 1: Verify Telemetry
-
-Chapter 1 enabled Kuadrant observability and tenant telemetry on the gateway. Confirm the resources are still present before generating traffic:
+No matches are expected on a cluster without these operators. If either is already installed, reuse it and its installation namespace for the waits below; do not create duplicate Subscriptions or OperatorGroups. Otherwise apply:
 
 ```bash
-oc get podmonitor kuadrant-limitador-monitor -n kuadrant-system
-oc get telemetrypolicy maas-telemetry -n openshift-ingress
+oc apply -f chapter-5/0-opentelemetry-subscription.yml
+oc apply -f chapter-5/1-coo-subscription.yml
 ```
 
-If either resource is missing, re-run the [MaaS Telemetry](../chapter-1/README.md#maas-telemetry) section from Chapter 1 and restart the gateway.
-
-## Step 2: Trigger Rate Limiting
-
-Each `MaaSSubscription` defines a per-model **token budget** — the maximum number of tokens a user can consume within a rolling time window. When the budget is exhausted the gateway returns `429 Too Many Requests` until the window resets. MaaS translates each `tokenRateLimits` entry into a Kuadrant `TokenRateLimitPolicy` on the model's HTTPRoute. `"stream": true` is required on every request (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)).
-
-List the policies MaaS created:
+Wait for each Subscription to report an installed CSV, then wait for installation:
 
 ```bash
-oc get tokenratelimitpolicy -A
-```
-
-Inspect the TinyLlama policy for `department-b`'s limited plan:
-
-```bash
-oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
-  | jq -r '.spec.limits | to_entries[] | "\(.key): \(.value.rates[0].limit) tok / \(.value.rates[0].window)"'
-```
-
-Expected output — the 1,000 tok/min value from your `MaaSSubscription`:
-
-```
-models-as-a-service-limited-plan-tinyllama-tokens: 1000 tok / 1m
-```
-
-> **Do not edit these resources directly.** The MaaS controller reconciles them from your `MaaSSubscription` definitions. Manual changes will be overwritten.
-
-### Tighten the Limit for the Demo
-
-The default 1,000 tok/min limit is too high for a quick demo. Lower TinyLlama to **100 tokens per minute** so a single request exhausts the budget and the next request gets a 429:
-
-```bash
-oc patch maassubscription limited-plan -n models-as-a-service --type=json \
-  -p='[{"op": "replace", "path": "/spec/modelRefs/1/tokenRateLimits/0/limit", "value": 100}]'
-```
-
-Verify the MaaS controller updated the underlying policy:
-
-```bash
-oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
-  | jq -r '.spec.limits | to_entries[] | "\(.key): \(.value.rates[0].limit) tok / \(.value.rates[0].window)"'
-```
-
-Expected output:
-
-```
-models-as-a-service-limited-plan-tinyllama-tokens: 100 tok / 1m
-```
-
-Restart the gateway so Limitador picks up the new limit:
-
-```bash
-oc rollout restart deployment/maas-default-gateway-data-science-gateway-class -n openshift-ingress
-oc rollout status deployment/maas-default-gateway-data-science-gateway-class -n openshift-ingress --timeout=300s
-```
-
-### Smoke Test with curl
-
-Confirm rate limiting works from your workstation. Use your `department-b` limited-plan key from Chapter 4 — rate limits are enforced per subscription, so a `department-a` key will not hit these limits. Send one request to consume tokens, then a second request that should be rejected:
-
-```bash
-curl -s -k -w '\nHTTP:%{http_code}\n' \
-  -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
-  -H "Authorization: Bearer $MAAS_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "tinyllama",
-    "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
-    "max_tokens": 200,
-    "stream": true
-  }' | tail -3
-
-curl -s -k -w '\nHTTP:%{http_code}\n' \
-  -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
-  -H "Authorization: Bearer $MAAS_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "tinyllama",
-    "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
-    "max_tokens": 200,
-    "stream": true
-  }' | tail -1
-```
-
-Expected output — first request succeeds, second is rejected:
-
-```
-HTTP:200
-HTTP:429
-```
-
-Or run the Red Hat quick-test loop (sends 10 rapid requests and counts status codes):
-
-```bash
-for i in $(seq 1 10); do
-  curl -s -k -o /dev/null -w "%{http_code}\n" \
-    -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
-    -H "Authorization: Bearer $MAAS_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50,"stream":true}'
-done | sort | uniq -c
-```
-
-Expected output — a mix of `200` and `429`:
-
-```
-   6 200
-   4 429
-```
-
-> **What is being limited?** Actual tokens consumed (from `usage.total_tokens` in each response), not request count. Enforcement happens at the gateway — rejected requests never reach the model server.
-
-### Troubleshooting
-
-If every request returns `200` and you never see a `429`:
-
-1. **Confirm the API key belongs to `limited-plan`.** Keys capture group membership at creation time. If you created the key while still in `department-a`, revoke it and create a new one on the `limited-plan` subscription (Chapter 4, Step 5).
-
-2. **Confirm the limit patch applied:**
-
-   ```bash
-   oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
-     | jq '.spec.limits[].rates[0].limit'
-   ```
-
-   Should print `100`.
-
-3. **Confirm telemetry is enabled and the gateway was restarted** (Chapter 1). Rate limiting depends on the Kuadrant Wasm filters on `maas-default-gateway`:
-
-   ```bash
-   oc get telemetrypolicy maas-telemetry -n openshift-ingress
-   oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models \
-     -o jsonpath='{.status.conditions[?(@.type=="Enforced")].status}{"\n"}'
-   ```
-
-4. **Check Limitador is receiving traffic** for the TinyLlama route:
-
-   ```bash
-   oc port-forward -n kuadrant-system svc/limitador-limitador 8080:8080 &
-   sleep 2
-   curl -s http://localhost:8080/metrics | grep tinyllama
-   kill %1
-   ```
-
-   After the smoke test you should see metrics with `limitador_namespace="ai-models/tinyllama-kserve-route"`. If only `granite-2b` appears, restart the gateway and retry.
-
-5. **Check Authorino logs** for subscription metadata errors:
-
-   ```bash
-   oc logs -n kuadrant-system deploy/authorino --tail=50 | grep selected_subscription
-   ```
-
-   Token rate limits only apply when `auth.identity.selected_subscription_key` matches your plan. If Authorino cannot resolve the subscription, limits are silently skipped.
-
-   > **Note:** Authorino also logs `failed to evaluate CEL expression ... no such key: selected_subscription` (without `_key`) on essentially every request, for every model, even when everything works. That's a separate, benign metric-labeling expression and not evidence of a problem — only investigate further if you see errors that reference `selected_subscription_key` or `subscription-info` itself.
-
-6. **Check for a Kuadrant Wasm shim task failure** — this is the most likely cause if steps 1–5 all check out and you still only see `200`s:
-
-   ```bash
-   GW_POD=$(oc get pods -n openshift-ingress -l 'gateway.networking.k8s.io/gateway-name=maas-default-gateway' -o jsonpath='{.items[0].metadata.name}')
-   oc logs $GW_POD -n openshift-ingress --since=2m | grep "Task failed"
-   ```
-
-   If every `/v1/chat/completions` request is immediately preceded by a line like `kuadrant_wasm_shim: Task failed: Some("N")`, the gateway's rate-limiting Wasm filter is failing its async callout to Limitador on every request — token usage is never recorded, so the budget never depletes and `429` never fires. Confirmed reproducible on a completely fresh `maas-default-gateway` pod (i.e. not stale state) affecting **both** Granite and TinyLlama routes, on rhcl-operator v1.4.2. Restarting Limitador and the gateway does **not** clear it.
-
-   This is a platform bug in Kuadrant's Wasm rate-limiting shim, not something fixable via `MaaSSubscription`/`TokenRateLimitPolicy` changes. If you hit this, the token-budget and 429 behavior in the rest of this chapter cannot be demonstrated until an upstream fix or a newer `rhcl-operator` build is available — check `oc get subscription rhcl-operator -n kuadrant-system -o jsonpath='{.status.installedCSV}'` against the latest in your catalog. The remaining steps in this chapter (metrics queries, vLLM PodMonitor, Perses dashboard) are unaffected and still worth completing — the `limited_calls` panel will simply stay at zero until the underlying bug is fixed.
-
-## Step 3: Query Metrics (Chargeback)
-
-### Verify Prometheus Pipeline
-
-The `kuadrant-limitador-monitor` PodMonitor lives in `kuadrant-system`, a user namespace from monitoring's perspective — it's scraped by the **user workload monitoring** Prometheus enabled in Chapter 1, not the platform instance. Query `prometheus-user-workload`, not `prometheus-k8s`:
-
-```bash
-oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c prometheus -- \
-  curl -s 'http://localhost:9090/api/v1/query?query=authorized_calls' | jq
-```
-
-### OpenShift Metrics Console
-
-Open the **OpenShift Web Console** → **Observe → Metrics** and run these PromQL queries:
-
-| Query | What it shows |
-|---|---|
-| `authorized_hits` | Total tokens consumed (the billing metric) |
-| `authorized_calls` | Total successful API requests |
-| `limited_calls` | Rate limit rejections (429 responses) |
-
-Export to CSV using the **Download** icon for chargeback reports.
-
-## Step 4: Enable vLLM Model Server Metrics
-
-The gateway-level metrics (`authorized_hits`, `authorized_calls`, `limited_calls`) are scraped automatically via the Kuadrant Limitador PodMonitor. Model-server metrics such as **Time to First Token** come from the vLLM process inside each model pod and require a separate PodMonitor.
-
-```bash
-oc apply -f chapter-5/vllm-podmonitor.yml
-```
-
-Verify the PodMonitor is created and that Prometheus starts scraping:
-
-```bash
-oc get podmonitor vllm-metrics -n ai-models
-
-# After ~30 seconds, confirm the metric exists in Prometheus (user workload instance)
-oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c prometheus -- \
-  curl -s 'http://localhost:9090/api/v1/query?query=vllm:time_to_first_token_seconds_count' \
-  | jq '.data.result | length'
-```
-
-The result should be `2` (one per model). If `0`, check that the PodMonitor label selector matches the model server pods:
-
-```bash
-oc get pods -n ai-models --show-labels
-```
-
-Adjust the `spec.selector.matchLabels` in `vllm-podmonitor.yml` to match a label present on the vLLM model server pods, then re-apply.
-
-## Step 5: Perses Dashboard
-
-Instead of deploying a separate Grafana instance, we use [Perses](https://perses.dev/) — the cloud-native dashboard tool that ships with the Cluster Observability Operator (COO). Perses dashboards are Kubernetes CRDs: you manage them with `oc apply`, store them in Git, and control access via standard RBAC. The dashboards appear directly in the OpenShift console under **Observe → Dashboards (Perses)**.
-
-### Install the Cluster Observability Operator
-
-Install COO via OLM. This automatically deploys the Perses Operator and registers the Perses CRDs.
-
-```bash
-oc apply -f chapter-5/coo-subscription.yml
-```
-
-Wait for the operator to install:
-
-```bash
-CSV=$(oc get subscription cluster-observability-operator \
-  -n openshift-cluster-observability-operator -o jsonpath='{.status.installedCSV}')
-oc wait csv "$CSV" -n openshift-cluster-observability-operator \
+oc wait subscription/opentelemetry-product -n openshift-opentelemetry-operator \
+  --for=jsonpath='{.status.installedCSV}' --timeout=600s
+OTEL_CSV=$(oc get subscription opentelemetry-product -n openshift-opentelemetry-operator -o jsonpath='{.status.installedCSV}')
+oc wait csv "$OTEL_CSV" -n openshift-opentelemetry-operator \
+  --for=jsonpath='{.status.phase}'=Succeeded --timeout=300s
+
+oc wait subscription/cluster-observability-operator -n openshift-cluster-observability-operator \
+  --for=jsonpath='{.status.installedCSV}' --timeout=600s
+COO_CSV=$(oc get subscription cluster-observability-operator -n openshift-cluster-observability-operator -o jsonpath='{.status.installedCSV}')
+oc wait csv "$COO_CSV" -n openshift-cluster-observability-operator \
   --for=jsonpath='{.status.phase}'=Succeeded --timeout=300s
 ```
 
-Verify the Perses CRDs and operators are available:
+Configure metrics after both operators are installed. This needs neither Tempo nor a traces configuration:
 
 ```bash
-oc get crds | grep perses
-# persesdashboards.perses.dev
-# persesdatasources.perses.dev
-# persesglobaldatasources.perses.dev
-
-oc get pods -n openshift-cluster-observability-operator
-# observability-operator-...   1/1   Running
-# perses-operator-...          1/1   Running
+oc patch dscinitialization default-dsci --type=merge -p '{
+  "spec": {
+    "monitoring": {
+      "managementState": "Managed",
+      "namespace": "redhat-ods-monitoring",
+      "metrics": {
+        "replicas": 1,
+        "storage": {"size": "5Gi", "retention": "14d"}
+      }
+    }
+  }
+}'
 ```
 
-### Enable the Monitoring UIPlugin with Perses
-
-Create a `UIPlugin` resource to enable the Perses UI in the OpenShift web console. This triggers creation of a Perses server instance and adds the **Observe → Dashboards (Perses)** menu item.
+Wait for the metrics and Perses backends:
 
 ```bash
-oc apply -f chapter-5/perses-ui-plugin.yml
+oc wait dscinitialization/default-dsci --for=condition=MonitoringStackAvailable --timeout=300s
+oc wait dscinitialization/default-dsci --for=condition=PersesAvailable --timeout=300s
+oc get pods -n redhat-ods-monitoring
+oc get pvc -n redhat-ods-monitoring
+oc get servicemonitor limitador-metrics -n redhat-ods-monitoring --show-labels
 ```
 
-Verify the UIPlugin is reconciled and the Perses server is running:
+MaaS creates `limitador-metrics` with `monitoring.opendatahub.io/scrape=true`. The collector selects that monitor automatically. Do not also label the Chapter 1 Limitador PodMonitor for this collector: collecting the same counters twice can inflate totals.
+
+The Prometheus (5 GiB) and Perses (1 GiB) PVCs must be `Bound`; a `Pending` claim needs a working default StorageClass. On the single-node validation cluster, an extra Alertmanager replica stayed `Pending` because of pod anti-affinity; the collector, Prometheus, Thanos, and Perses were healthy and Usage worked. Diagnose pending metrics/backend pods before generating demo traffic.
+
+## Step 2: Enable the Labels Required by Usage
+
+The shipped 3.5.1 dashboard queries `authorized_hits_total{user!=""}`. Chapter 1's aggregate telemetry keeps user labels disabled, so enable them **before** generating showback traffic:
 
 ```bash
-oc get uiplugin monitoring -o jsonpath='{.status.conditions[0].message}'
-# Plugin reconciled successfully
-
-oc get pods -n openshift-cluster-observability-operator -l app.kubernetes.io/name=perses
-# perses-0   1/1   Running
+oc patch maastenantconfig default-tenant -n models-as-a-service --type=merge -p '{
+  "spec": {
+    "telemetry": {
+      "enabled": true,
+      "metrics": {
+        "captureOrganization": true,
+        "captureUser": true,
+        "captureGroup": false,
+        "captureModelUsage": true
+      }
+    }
+  }
+}'
+oc get telemetrypolicy maas-telemetry -n openshift-ingress \
+  -o jsonpath='{.spec.metrics.default.labels}{"\n"}'
 ```
 
-> **Note:** After enabling the plugin, it may take a few minutes for the **Dashboards (Perses)** menu to appear in the OpenShift web console. A page refresh may be needed.
+Expected labels include `user`, `subscription`, and `model`. User labels increase metric cardinality and expose usernames to monitoring readers; enable them deliberately for this demo. They are required by this dashboard even when comparing aggregate subscription totals. Earlier traffic without a user label does not become visible retroactively.
 
-### Create a Global Thanos Querier Datasource
-
-Connect Perses to the platform Thanos Querier so dashboards can query Prometheus metrics cluster-wide. This uses Kubernetes-native authentication — the Perses server's ServiceAccount authenticates to Thanos Querier using its projected token.
-
-The manifest includes a `ClusterRoleBinding` that grants the Perses ServiceAccount the `cluster-monitoring-view` role, and a `PersesGlobalDatasource` that configures the connection.
+Verify that the operator-managed Usage dashboard is available:
 
 ```bash
-oc apply -f chapter-5/perses-datasource.yml
+oc wait persesdashboard/dashboard-3-maas-usage-admin -n redhat-ods-monitoring \
+  --for=condition=Available --timeout=120s
 ```
 
-Verify:
+If it remains unavailable, inspect its conditions:
 
 ```bash
-oc get persesglobaldatasources
-# NAME                        AGE
-# thanos-querier-datasource   ...
+oc get persesdashboard dashboard-3-maas-usage-admin -n redhat-ods-monitoring \
+  -o jsonpath='{.status.conditions}{"\n"}'
 ```
 
-### Deploy the MaaS Overview Dashboard
-
-Apply a `PersesDashboard` CR that visualises MaaS metrics. The dashboard is namespace-scoped and deployed to `ai-models`.
+On the validation cluster, MaaS created the dashboard before the Perses server existed. Its condition retained an old `PersesBackendError` / connection-refused error after the server became healthy. Retrying reconciliation with an annotation resolved it:
 
 ```bash
-oc apply -f chapter-5/perses-dashboard.yml
+oc annotate persesdashboard dashboard-3-maas-usage-admin -n redhat-ods-monitoring \
+  tutorial.openshift-ai/reconcile="$(date -u +%Y%m%dT%H%M%SZ)" --overwrite
+oc wait persesdashboard/dashboard-3-maas-usage-admin -n redhat-ods-monitoring \
+  --for=condition=Available --timeout=120s
 ```
 
-This creates a dashboard with the following sections:
+## Step 3: Generate Comparable Usage
 
-| Section | Panels | Metrics |
-|---|---|---|
-| **Summary** | Stat panels | `sum(authorized_hits)`, `sum(authorized_calls)`, `sum(limited_calls)` |
-| **Token Consumption & Chargeback** | Bar chart + Time series | `sum(authorized_hits) by (app_id)`, `sum(rate(authorized_hits[$interval])) by (app_id)` |
-| **Rate Limiting** | Time series charts | `sum(rate(authorized_calls[$interval]))` vs `sum(rate(limited_calls[$interval]))` |
-| **Model Performance** | Time series chart | `histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket[$interval])) by (le, model_name))` |
-
-A `$interval` variable (1m / 5m / 15m) controls the rate window for all panels.
-
-Verify:
+Keep both department API keys exported from Chapter 4:
 
 ```bash
-oc get persesdashboards -n ai-models
-# NAME            AGE
-# maas-overview   ...
-```
-
-### Access the Dashboard
-
-1. Open the **OpenShift Web Console**
-2. Navigate to **Observe → Dashboards (Perses)**
-3. Select the **ai-models** project from the namespace dropdown
-4. Click **MaaS Overview**
-
-Generate some traffic so the dashboard has data to display. Run a quick curl loop against TinyLlama using your `department-b` key:
-
-```bash
-export MAAS_API_KEY="sk-oai-..."  # your department-b key from Chapter 4
 export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-
-for i in $(seq 1 20); do
-  echo "Request $i:"
-  curl -s -k -o /dev/null -w "  HTTP %{http_code}\n" \
-    -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
-    -H "Authorization: Bearer $MAAS_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"What is Kubernetes?"}],"max_tokens":100,"stream":true}'
-  sleep 2
-done
+: "${MAAS_API_KEY_A:?Set the department-a key saved in Chapter 4}"
+: "${MAAS_API_KEY_B:?Set the department-b key from Chapter 4}"
 ```
 
-You should see a mix of `200` and `429` responses. Switch back to the Perses dashboard and watch the panels update in real time.
+If you lost either key, generate a replacement through **Gen AI studio → API keys** while your user belongs to the corresponding department. Select `standard-plan` for department-a and `limited-plan` for department-b. Keys retain the group snapshot from creation.
 
-![MaaS Overview dashboard showing token consumption, API requests, and rate limit rejections](../img/perses_maas_dashboard.png)
+Create three usage series: department-a on Granite, and department-b on Granite and TinyLlama. First seed each series so monitoring can establish a counter baseline:
 
-> **Tip:** Since the dashboard is a Kubernetes CR, you can also edit it interactively in the OpenShift console — changes are saved back to the `PersesDashboard` resource. Or export and edit as YAML:
->
-> ```bash
-> oc get persesdashboard maas-overview -n ai-models -o yaml > my-dashboard.yaml
-> # Edit, then re-apply
-> oc apply -f my-dashboard.yaml
-> ```
+```bash
+send_request() {
+  curl -sS -k --max-time 60 -o /dev/null -w "$1 HTTP:%{http_code}\n" \
+    https://$ROUTE_HOST/ai-models/$1/v1/chat/completions \
+    -H "Authorization: Bearer $2" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain Kubernetes in one sentence.\"}],\"max_tokens\":40,\"stream\":true}"
+}
 
----
+send_request granite-2b "$MAAS_API_KEY_A"
+send_request granite-2b "$MAAS_API_KEY_B"
+send_request tinyllama "$MAAS_API_KEY_B"
+```
 
-🎉 **Congratulations!** You now have a fully governed, observable AI platform with subscription-based access control, rate limiting, and chargeback capabilities — with dashboards managed as Kubernetes CRDs directly in the OpenShift console.
+Expect `HTTP:200` for all three. Wait for the collector and Prometheus to scrape, then generate increments:
+
+```bash
+sleep 45
+for i in $(seq 1 3); do
+  send_request granite-2b "$MAAS_API_KEY_A"
+  send_request granite-2b "$MAAS_API_KEY_B"
+  send_request tinyllama "$MAAS_API_KEY_B"
+done
+export MAAS_API_KEY=$MAAS_API_KEY_B
+```
+
+Allow another 1–2 minutes for the collector, Prometheus, and dashboard refresh. If TinyLlama returns `429` from an earlier rate-limit experiment, restore its 1,000 tokens/minute limit using the command at the end of Chapter 6, then wait for the one-minute window to reset.
+
+## Step 4: Explore the Embedded Dashboard
+
+1. Log in to the **OpenShift AI dashboard** as an administrator.
+2. Open **Observe & monitor → Dashboard → Usage**. Refresh the browser if the tab was created after you opened the page.
+3. Choose a time period that includes your new traffic, such as **Last 30 minutes**, and click **Refresh**.
+4. Review **Total tokens**, **Total requests**, **Total rate limited**, **Success rate**, and **Active users**.
+
+![OpenShift AI Usage dashboard with model and subscription filters, token consumption, request counts, and rate-limit rejections](../img/maas-usage-overview.png)
+
+*Example captured on OpenShift AI 3.5.1 using **Last 6 hours** to include the full demo. The screenshots include the rate-limit test from Chapter 6; before that test, zero rate-limit rejections are expected. Your totals will differ.*
+
+5. In **Subscription**, select `standard-plan`. In **Model**, select `granite-2b`.
+6. Switch Subscription to `limited-plan` and compare Granite and TinyLlama.
+7. Set **View by** to **By subscription** to compare departments, then **By model** to compare model consumption. Reset filters to **All** when making an overall comparison.
+8. Scroll down to the **Token consumption table** to inspect the user/subscription/model rows.
+
+Expected nonzero combinations:
+
+| Subscription | Department | Model |
+|---|---|---|
+| `standard-plan` | department-a | `granite-2b` |
+| `limited-plan` | department-b | `granite-2b` |
+| `limited-plan` | department-b | `tinyllama` |
+
+![Token consumption grouped by subscription, with table rows for department-a on Granite and department-b on Granite and TinyLlama](../img/maas-usage-by-subscription.png)
+
+*With **View by → By subscription** and filters set to **All**, the chart compares the two plans and the table shows all three subscription/model combinations. The TinyLlama row also shows the Chapter 6 rejections.*
+
+The same admin user creates both keys in this tutorial, so **Active users can be 1** even though two departments have traffic. Counts are derived from sampled counter increases and can differ from the exact number of requests you sent. Initial counter values, scrape timing, and restarts affect the result.
+
+## Step 5: Export and Verify Usage
+
+Set **View by → By subscription** for department attribution, or **By model** for model comparison. Hover over or click the **Token consumption chart** panel, then click **Export time series data as CSV** in its top-right toolbar.
+
+![Token consumption chart toolbar with the CSV download button at the far right](../img/maas-usage-csv-export.png)
+
+*Use the download arrow at the far right of the chart header; the adjacent diagonal arrows change the panel view mode.*
+
+The browser downloads `tokenConsumptionChart_data.csv`. It contains a `DateTime` column followed by series columns such as `{subscription=_limited-plan_}` or `{model=_tinyllama_}`. This exports the chart's sampled time series, not the user table. The selected filters determine which series appear. Check the headers and nonzero values before using the file for showback.
+
+For an independent pipeline check, query the same Thanos endpoint used by the Usage dashboard:
+
+```bash
+oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c prometheus -- \
+  curl -s 'http://thanos-querier-data-science-thanos-querier.redhat-ods-monitoring.svc.cluster.local:10902/api/v1/query?query=authorized_hits_total' \
+  | jq '.data.result[] | {user: .metric.user, subscription: .metric.subscription, model: .metric.model, tokens: .value[1]}'
+```
+
+Expect entries with your OpenShift username (`admin` on the validation cluster), the two subscription names, and the relevant models. This query shows cumulative counters; the dashboard calculates increases over the selected time range. Raw user-workload Prometheus exposes `authorized_hits`, whereas the AI OpenTelemetry pipeline exposes `authorized_hits_total`. Querying the wrong metric name or monitoring instance can make a healthy pipeline look empty.
+
+If the dashboard is still empty, verify the user label, `limitador-metrics` ServiceMonitor, collector readiness, and time range. Send a second round after the first scrape: `increase()` needs multiple samples. The default dashboard's token chart uses a two-hour increase window in 3.5.1; use the overview/table and selected time range when checking totals.
+
+Proceed to [Chapter 6: Observability & Rate Limiting](../chapter-6/README.md) to demonstrate token-budget enforcement and inspect rejection counts and model performance in the built-in OpenShift AI dashboards.
+
+References: [MaaS administration and showback](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/govern_llm_access_with_models-as-a-service/deploy-and-manage-models-as-a-service), [OpenShift AI observability](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/managing_openshift_ai/managing-observability_managing-rhoai).

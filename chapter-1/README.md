@@ -2,11 +2,62 @@
 
 > **Complete this chapter first.** All subsequent chapters assume the infrastructure below is installed and working.
 
+## Install for a demo
+
+If your audience is focused on using MaaS, run the installer and continue with Chapter 2. It configures this chapter's operators, gateway, Authorino TLS, database, monitoring, MaaS API, telemetry, and dashboard, then runs the final verification. The manual walkthrough below explains each step for administrators.
+
+Start with an installed OpenShift **4.20.x** / OpenShift AI **3.5.x** platform meeting the [prerequisites](#prerequisites), and log in with `oc` as a cluster admin. From the repository root:
+
+```bash
+./chapter-1/install.sh --check-only
+./chapter-1/install.sh
+```
+
+`--check-only` checks local tools, admin access, platform versions/resources, the default StorageClass, gateway class, and free GPU capacity without changing the cluster. The installer adds dependency checks before creating Kuadrant and waits for components as it configures them. It preserves existing monitoring settings and reuses an existing RHCL subscription. It stops on an error; resolve the reported failure and rerun. Success ends with **Chapter 1 complete. Continue with chapter-2/README.md.** No shell variables need to be carried over from the installer.
+
+For a Demo Platform cluster whose default Llama model occupies the GPU, use the explicit scale-down option. For the single-L4 alternative, also opt into time-slicing:
+
+```bash
+# Free the GPU used by the Demo Platform's default model:
+./chapter-1/install.sh --scale-down-demo-model
+
+# Alternative for one physical L4 GPU (see the time-slicing notes below):
+./chapter-1/install.sh --scale-down-demo-model --gpu-time-slicing
+```
+
+Choose one installation command for your cluster. The installer checks Kubernetes GPU reservations; available GPU memory, registry connectivity for the later model images, and Chapter 5's storage capacity still need to meet the prerequisites. GPU slots already occupied by running models are counted as used. The database uses the disposable storage and example credentials described below. The script does not install OpenShift AI or the GPU drivers, or upgrade their versions.
+
 ## Prerequisites
 
-- OpenShift AI with GPU
+- OpenShift **4.20.x** with OpenShift AI **3.5.x** installed, its dashboard available, and KServe/llm-d configured. This walkthrough starts after platform installation, using the default `default-dsc`, `default-dsci`, and `default-gateway` resources. For a different installation, complete the [llm-d platform setup](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/deploy_models_using_distributed_inference_with_llm-d/deploying-models-using-distributed-inference_distributed-inference) first.
+- NVIDIA GPU Operator and drivers ready, with two free schedulable GPUs. The tested GPUs are L4 (24 GiB each). A single L4 with time-slicing is an alternative demo configuration, described below; that alternative was previously tested on 3.4, but has not been revalidated on 3.5.
+- A working default StorageClass for the monitoring PVCs in Chapter 5 (at least 6 GiB total), plus capacity for the operators, gateway, monitoring, and two model pods
+- Cluster image-pull access to `registry.redhat.io` and `quay.io`; the model weights are pulled as OCI images
+- `curl` and `jq` available locally
 - `oc` CLI logged in as a cluster admin
 - `envsubst` available locally (typically provided by `gettext`)
+- A local checkout of this repository, a Bash shell, and a browser for the dashboards
+
+Run all commands from the repository root. Open Bash before starting, and keep that terminal for all chapters:
+
+```bash
+bash
+```
+
+Check local tools and platform resources:
+
+```bash
+command -v oc curl jq envsubst
+oc whoami
+oc get datasciencecluster default-dsc
+oc get dscinitialization default-dsci
+oc get gatewayconfig default-gateway
+oc wait gatewayconfig/default-gateway --for=condition=Ready --timeout=300s
+oc get storageclass
+oc get nodes -o custom-columns='NAME:.metadata.name,GPUS:.status.allocatable.nvidia\.com/gpu'
+```
+
+Confirm a StorageClass is marked `(default)`. GPU allocatable is capacity, not free capacity: check **Allocated resources** in `oc describe node <gpu-node>` and free resources used by other models before deploying. If the default platform resources or GPU capacity are missing, finish the prerequisite setup before continuing.
 
 > [!TIP]
 > For Red Hatters: install from [Demo Platform](https://catalog.demo.redhat.com/catalog/babylon-catalog-prod?item=babylon-catalog-prod/published.openshift-ai-v3.prod&utm_source=webapp&utm_medium=share-link)
@@ -15,13 +66,35 @@
 > 
 > If that deployment does not exist on your cluster, skip this step.
 
+## Check the OpenShift AI Version
+
+The tutorial assumes OpenShift AI is already installed; it does not install or pin the AI operator. Check the installed release and update policy before continuing:
+
+```bash
+oc get clusterversion
+oc get subscription rhods-operator -n redhat-ods-operator \
+  -o custom-columns=CHANNEL:.spec.channel,APPROVAL:.spec.installPlanApproval,INSTALLED:.status.installedCSV
+oc get datasciencecluster default-dsc \
+  -o jsonpath='{.status.release.version}{"\n"}'
+```
+
+The validation cluster uses OpenShift **4.20.41**, OpenShift AI **3.5.1**, and the `stable-3.x` channel with `Automatic` approval. Automatic approval follows the configured channel; it does not guarantee a specific minor version. If your cluster is older, follow the [supported upgrade procedure](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/) before continuing. Record the installed version when reproducing this tutorial.
+
 ## Enabling MaaS
 
 Models-as-a-Service (MaaS) exposes LLMs through managed API endpoints with subscription-based governance — token quotas, rate limits, and API key authentication. Setting it up requires a policy engine, an API gateway, a database, and a few OpenShift AI feature flags. The sections below walk through each component.
 
 ### Red Hat Connectivity Link Operator
 
-MaaS relies on the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) for routing and policy enforcement. [Red Hat Connectivity Link](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.0/html-single/introduction_to_connectivity_link/index) (built on the [Kuadrant](https://kuadrant.io/) project) is the supported Gateway API provider — it supplies authentication, authorization, and rate-limiting policies that MaaS attaches to model endpoints.
+MaaS relies on the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) for routing and policy enforcement. [Red Hat Connectivity Link](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.4/) (built on the [Kuadrant](https://kuadrant.io/) project) supplies authentication, authorization, and rate-limiting policies that MaaS attaches to model endpoints.
+
+Check for an existing RHCL installation first:
+
+```bash
+oc get subscription -A | grep rhcl-operator
+```
+
+If present, reuse it and substitute its installation namespace in the operator waits below. Otherwise install it in `kuadrant-system`:
 
 ```bash
 oc apply -f chapter-1/0-connectivity-link.yml
@@ -32,24 +105,45 @@ This creates the `kuadrant-system` namespace, an OperatorGroup, and a Subscripti
 Wait for the operator to be ready:
 
 ```bash
-until oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n kuadrant-system -l operators.coreos.com/rhcl-operator.kuadrant-system --timeout=10s 2>/dev/null; do sleep 5; done
+oc wait subscription/rhcl-operator -n kuadrant-system \
+  --for=jsonpath='{.status.installedCSV}' --timeout=600s
+RHCL_CSV=$(oc get subscription rhcl-operator -n kuadrant-system -o jsonpath='{.status.installedCSV}')
+oc wait csv "$RHCL_CSV" -n kuadrant-system \
+  --for=jsonpath='{.status.phase}'=Succeeded --timeout=600s
 ```
 
-The loop retries until the CSV exists and reaches `Succeeded`. The operator label is not set while the CSV is still installing, so a single `oc wait` can fail with "no matching resources found" if run too early.
+These checks allow time for OLM to resolve and install the operator. On timeout, inspect the Subscription's conditions and InstallPlan before continuing.
 
 ### Kuadrant
 
-With the operator installed, create a Kuadrant instance. This deploys the control-plane components — [Authorino](https://github.com/Kuadrant/authorino) (auth) and [Limitador](https://github.com/Kuadrant/limitador) (rate limiting) — that enforce policies on Gateway API resources.
+Before creating the instance, check that the dependency APIs and operators are ready. On a fresh installation, the Kuadrant Operator can start before those APIs are available and skip their reconcilers. The pre-check below replaces its pod only if its startup logs show that this happened, so it discovers the now-installed dependencies before creating Kuadrant. Pod replacement is used because OLM can revert `oc rollout restart`.
+
+The same pre-check is used by the demo installer. It stops on a failed check and applies the Kuadrant manifest only after the checks pass:
 
 ```bash
-oc apply -f chapter-1/1-kuadrant.yml
+./chapter-1/preflight-kuadrant.sh && oc apply -f chapter-1/1-kuadrant.yml
 ```
 
-Wait for Kuadrant to become ready:
+This creates the Kuadrant instance, which deploys [Authorino](https://github.com/Kuadrant/authorino) (auth) and [Limitador](https://github.com/Kuadrant/limitador) (rate limiting) to enforce policies on Gateway API resources. Wait for it to become ready:
 
 ```bash
-oc wait --for=condition=Ready kuadrant/kuadrant -n kuadrant-system --timeout=120s
+oc wait --for=condition=Ready kuadrant/kuadrant -n kuadrant-system --timeout=600s
 ```
+
+### Model Serving Prerequisites
+
+Enable KServe if it is not already managed, then confirm llm-d dependencies are available:
+
+```bash
+oc patch datasciencecluster default-dsc --type=merge \
+  -p '{"spec":{"components":{"kserve":{"managementState":"Managed"}}}}'
+oc wait datasciencecluster/default-dsc --for=condition=KserveReady --timeout=600s
+oc wait datasciencecluster/default-dsc \
+  --for=condition=KserveLLMInferenceServiceDependencies --timeout=600s
+oc get crd llminferenceservices.serving.kserve.io inferencepools.inference.networking.k8s.io
+```
+
+On timeout, inspect `oc get datasciencecluster default-dsc -o yaml` for dependency errors and complete the linked llm-d platform setup. The tutorial supplies its own MaaS gateway and configures RHCL authentication below; it does not require LeaderWorkerSet or multi-node inference.
 
 ### Gateway
 
@@ -69,22 +163,30 @@ Look up the GatewayClass that is backed by the OpenShift gateway controller. Thi
 
 ```bash
 export GW_CLASS=$(oc get gatewayclass -o custom-columns=NAME:.metadata.name,CTRL:.spec.controllerName --no-headers | grep "openshift.io/gateway-controller" | awk '{print $1}' | head -n 1)
+: "${GW_CLASS:?No OpenShift GatewayClass found; complete the platform gateway setup first}"
+oc wait gatewayclass/$GW_CLASS --for=condition=Accepted --timeout=300s
 ```
+
+#### Create the external Route
+
+In environments without **DNSPolicy** or MetalLB there is no external load balancer to assign an IP to the Gateway's ClusterIP service. An OpenShift Route bridges the gap by fronting the Gateway through the default OpenShift Router (HAProxy), giving it a publicly reachable hostname with re-encrypted TLS.
+
+```bash
+envsubst '$GW_CLASS' < chapter-1/4-route.yml | oc apply -f -
+export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
+: "${ROUTE_HOST:?The inference Route has no hostname}"
+```
+
+Create the Route before the Gateway to obtain its assigned hostname. The backend Service will appear when the Gateway is created below.
 
 #### Deploy the Gateway
 
 Create the Gateway with HTTP (80) and HTTPS (443) listeners that accept routes from all namespaces. The `kuadrant.io/gateway: "true"` label tells Kuadrant to watch this Gateway for policy attachments, and the `security.opendatahub.io/authorino-tls-bootstrap: "true"` annotation triggers automatic EnvoyFilter creation so the Gateway trusts Authorino's TLS certificate.
 
-```bash
-envsubst < chapter-1/3-gateway.yml | oc apply -f -
-```
-
-### Route
-
-In environments without **DNSPolicy** or MetalLB there is no external load balancer to assign an IP to the Gateway's ClusterIP service. An OpenShift Route bridges the gap by fronting the Gateway through the default OpenShift Router (HAProxy), giving it a publicly reachable hostname with re-encrypted TLS.
+The `http` and `https` listeners advertise `$ROUTE_HOST`. A second HTTPS listener, `https-router`, accepts the OpenShift Router's backend TLS connection without a hostname restriction. The hostname must be present on `https` at creation time: two HTTPS listeners on port 443 without hostnames fail Gateway API validation.
 
 ```bash
-envsubst < chapter-1/4-route.yml | oc apply -f -
+envsubst '$GW_CLASS $ROUTE_HOST' < chapter-1/3-gateway.yml | oc apply -f -
 ```
 
 ### Configure Authorino
@@ -130,40 +232,54 @@ MaaS needs a PostgreSQL database to persist subscriptions, API keys, authorizati
 
 ```bash
 oc apply -f chapter-1/5-maas-db.yml
+oc rollout status deployment/maas-postgres -n redhat-ods-applications --timeout=300s
 ```
+
+This database uses container-local storage and example credentials for a disposable demo. Replacing its pod loses API-key records; recreate the keys if that happens. Use persistent storage and managed credentials for a long-lived environment.
+
+### User Workload Monitoring
+
+Enable user workload monitoring **before** enabling MaaS, which depends on it for a healthy installation. On this fresh cluster, apply the supplied configuration:
+
+```bash
+oc apply -f chapter-1/6-user-workload-monitoring.yml
+oc wait --for=create statefulset/prometheus-user-workload \
+  -n openshift-user-workload-monitoring --timeout=300s
+oc rollout status statefulset/prometheus-user-workload \
+  -n openshift-user-workload-monitoring --timeout=300s
+```
+
+On a cluster with an existing `cluster-monitoring-config`, merge `enableUserWorkload: true` into its `config.yaml` instead of replacing the other settings with this demo manifest.
 
 ### MaaS API Layer
 
-Enable the two DataScienceCluster components that power MaaS:
-
-- **`llamastackoperator`** — deploys the Llama Stack Operator, which manages agentic and RAG workflow components (inference, embeddings, vector stores).
-- **`kserve.modelsAsService`** — deploys the MaaS controller, which reconciles MaaS custom resources (Tenant, MaaSSubscription, MaaSAuthPolicy, MaaSModelRef) and wires up the API layer.
-
-Both default to `Removed`; setting them to `Managed` opts in.
+Enable MaaS through the AI Gateway component. In OpenShift AI 3.5, `kserve.modelsAsService` is deprecated and cannot be changed from `Removed` to `Managed`. Use `aigateway.modelsAsAService` instead:
 
 ```bash
 oc patch datasciencecluster default-dsc --type=merge -p '{
   "spec": {
     "components": {
-      "llamastackoperator": {
-        "managementState": "Managed"
-      },
-      "kserve": {
-        "modelsAsService": {
+      "aigateway": {
+        "managementState": "Managed",
+        "modelsAsAService": {
           "managementState": "Managed"
         }
       }
     }
   }
 }'
+oc wait datasciencecluster/default-dsc --for=condition=ModelsAsAServiceReady --timeout=600s
 ```
 
-### User Workload Monitoring
+The operator creates the default `AITenant` in `ai-tenants`, a `MaasTenantConfig` in `models-as-a-service`, and the MaaS API in `redhat-ai-gateway-infra`. It copies the database secret into that infrastructure namespace and qualifies the PostgreSQL service hostname automatically. OGX (formerly Llama Stack) is not required for the MaaS API walkthrough.
 
-OpenShift's built-in monitoring stack only scrapes platform components by default. MaaS tracks token consumption and model usage through Prometheus metrics emitted by user workloads. Enabling user workload monitoring deploys a dedicated Prometheus instance in `openshift-user-workload-monitoring` that scrapes ServiceMonitor/PodMonitor targets in user namespaces — making those metrics available for the MaaS observability dashboard.
+Wait for the tenant configuration to exist, then wait for readiness:
 
 ```bash
-oc apply -f chapter-1/6-user-workload-monitoring.yml
+oc wait --for=create maastenantconfig/default-tenant -n models-as-a-service --timeout=300s
+oc wait --for=condition=Ready maastenantconfig/default-tenant \
+  -n models-as-a-service --timeout=300s
+oc rollout status deployment/maas-api -n redhat-ai-gateway-infra --timeout=300s
 ```
 
 ### MaaS Telemetry
@@ -173,7 +289,7 @@ Token rate limiting and chargeback metrics depend on Kuadrant observability and 
 Wait for the MaaS tenant to become ready:
 
 ```bash
-oc wait --for=condition=Ready tenants.maas.opendatahub.io/default-tenant \
+oc wait --for=condition=Ready maastenantconfig/default-tenant \
   -n models-as-a-service --timeout=300s
 ```
 
@@ -188,7 +304,7 @@ oc patch kuadrant kuadrant -n kuadrant-system \
 Enable tenant telemetry (creates the `TelemetryPolicy` on the gateway):
 
 ```bash
-oc patch tenants.maas.opendatahub.io default-tenant -n models-as-a-service \
+oc patch maastenantconfig default-tenant -n models-as-a-service \
   --type merge \
   -p '{
     "spec": {
@@ -208,8 +324,12 @@ oc patch tenants.maas.opendatahub.io default-tenant -n models-as-a-service \
 Restart the gateway so it picks up the new telemetry and rate-limit filters:
 
 ```bash
-oc rollout restart deployment/maas-default-gateway-data-science-gateway-class -n openshift-ingress
-oc rollout status deployment/maas-default-gateway-data-science-gateway-class -n openshift-ingress --timeout=300s
+oc wait gateway/maas-default-gateway -n openshift-ingress --for=condition=Programmed --timeout=300s
+oc wait telemetrypolicy/maas-telemetry -n openshift-ingress --for=condition=Enforced --timeout=300s
+oc rollout restart deployment -n openshift-ingress \
+  -l gateway.networking.k8s.io/gateway-name=maas-default-gateway
+oc rollout status deployment -n openshift-ingress \
+  -l gateway.networking.k8s.io/gateway-name=maas-default-gateway --timeout=300s
 ```
 
 Verify:
@@ -221,11 +341,7 @@ oc get telemetrypolicy maas-telemetry -n openshift-ingress
 
 ### Enable GenAI Studio
 
-Toggle three feature flags in the OpenShift AI dashboard configuration:
-
-- **`genAiStudio`** — shows the *Gen AI Studio* menu in the left-hand navigation.
-- **`modelAsService`** — adds the MaaS interface (AI asset endpoints, API key management) inside Gen AI Studio.
-- **`maasAuthPolicies`** — surfaces the *Subscription* and *Authorization policies* settings in the admin area.
+Enable Gen AI Studio, MaaS, and the embedded observability dashboard. The old `maasAuthPolicies` flag is deprecated and rejected on a fresh 3.5 installation; subscription and authorization settings are part of the MaaS interface.
 
 ```bash
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge -p '{
@@ -233,40 +349,36 @@ oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --ty
     "dashboardConfig": {
       "modelAsService": true,
       "genAiStudio": true,
-      "maasAuthPolicies": true
+      "observabilityDashboard": true
     }
   }
 }'
 ```
 
-### MaaS Routing Patch
+### Gateway Hostname Discovery
 
-The OpenShift AI dashboard needs to know the external URL of the MaaS API so it can proxy requests from the browser. We capture the hostname of the Route created earlier and inject it as an environment variable into the dashboard Deployment.
-
-```bash
-oc wait --for=condition=Available deployment/rhods-dashboard -n redhat-ods-applications --timeout=300s
-```
-
-Capture the external Route URL and inject it into the Dashboard:
+OpenShift AI 3.5 discovers the MaaS API through `/v1/tenants`, which prefers the first ready **HTTPS listener**. The Gateway deployment above already advertises the external Route hostname on both HTTP and HTTPS. Verify it:
 
 ```bash
-export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-oc set env deployment/rhods-dashboard -n redhat-ods-applications MAAS_API_URL=https://$ROUTE_HOST/maas-api
+oc get gateway maas-default-gateway -n openshift-ingress \
+  -o custom-columns=NAME:.spec.listeners[*].name,HOSTNAME:.spec.listeners[*].hostname
 ```
 
-Wait for the Dashboard to restart with the new variable (this may take 1–2 minutes):
+The gateway manifest also includes a second HTTPS listener, `https-router`, **after** `https` and without a hostname restriction. Keep this fallback: the re-encrypting OpenShift Router's backend TLS connection must match it. Restricting every HTTPS listener to the external hostname causes `503` responses with `filter_chain_not_found` in the gateway logs. Leaving only HTTP with an external hostname causes tenant discovery to fail and the API Keys page to report `maas-api is not available`.
+
+The 3.4 workaround that sets `MAAS_API_URL` on `rhods-dashboard` is no longer part of this setup. Refresh the OpenShift AI dashboard after configuration. We verify the API key UI and usage dashboard in Chapters 4 and 5.
+
+### GPU Time-Slicing (Single Physical GPU Only)
+
+First inspect GPU capacity:
 
 ```bash
-oc rollout status deployment/rhods-dashboard -n redhat-ods-applications
+oc get nodes -o custom-columns='NAME:.metadata.name,GPUS:.status.allocatable.nvidia\.com/gpu'
 ```
 
-Refresh your OpenShift AI browser window. The Gen AI Studio - API Key generation tab menu option will now appear in your left-hand navigation pane.
+If the cluster already has at least two free schedulable GPUs, skip this section. The 3.5.1 validation cluster has four L4 GPUs and does not need time-slicing.
 
-The menu options for Subscription and Authorization policies will appear in the Settings section of the OpenShift AI dashboard.
-
-### GPU Time-Slicing
-
-This tutorial deploys two small models side by side on a single GPU. By default Kubernetes treats each physical GPU as a single schedulable resource, so only one model pod could claim it. GPU time-slicing makes the node advertise 2 virtual GPUs, allowing both pods to be scheduled and share the physical GPU's memory and compute.
+For a cluster with one physical NVIDIA L4 GPU, this tutorial deploys two small models side by side on that GPU. By default Kubernetes treats each physical GPU as a single schedulable resource, so only one model pod could claim it. GPU time-slicing makes the node advertise 2 virtual GPUs, allowing both pods to be scheduled and share the physical GPU's memory and compute.
 
 Apply the time-slicing ConfigMap:
 
@@ -290,11 +402,10 @@ oc rollout status daemonset/nvidia-device-plugin-daemonset -n nvidia-gpu-operato
 Verify the node now advertises 2 GPUs (the device plugin may take a few seconds to update allocatable resources after restart):
 
 ```bash
-until [ "$(oc get node -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}')" = "2" ]; do sleep 5; done
-oc get node -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}'
+oc get nodes -o custom-columns='NAME:.metadata.name,GPUS:.status.allocatable.nvidia\.com/gpu'
 ```
 
-Expected output: `2`
+Expected output: the GPU node advertises `2` schedulable GPUs. Do not wait on the first node: it might be a control-plane node without a GPU.
 
 ### Verify script
 
@@ -304,7 +415,7 @@ Run the verification script to confirm every component is healthy:
 ./chapter-1/7-verify-maas.sh
 ```
 
-It checks the OpenShift version, operator CSVs, Kuadrant readiness, Llama Stack state, user workload monitoring, the database secret, Gateway programming status, and KServe — printing a pass/fail for each.
+It checks the cluster connection, OpenShift AI version, operator health, Kuadrant readiness, MaaS component and tenant state, user workload monitoring, database availability, Gateway programming status, llm-d prerequisites, Authorino TLS, dashboard flags, and the external MaaS endpoint — printing a pass/fail for each. Every check must pass before Chapter 2. The installer runs this script automatically.
 
 ---
 
