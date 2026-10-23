@@ -1,13 +1,20 @@
 # Part 2 — Chapter 4: Use MaaS with your API keys
 
-**Role:** model consumer, played by the administrator from Part 1. You have both keys from [creating demonstration API keys](../chapter-3/api-keys.md). You will not install components, deploy models, or change group membership here.
+**Role:** model consumer, played by the administrator from Part 1. You have both keys from [creating demonstration API keys](../chapter-3/README.md#step-7-create-demonstration-api-keys). You will not install components or deploy models here.
 
 | Department | Subscription | Available models | Token limits per user |
 |---|---|---|---|
 | `department-a` | `standard-plan` | Granite | 50,000/min |
 | `department-b` | `limited-plan` | Granite and TinyLlama | Granite 2,000/min; TinyLlama 1,000/min |
 
-Use the same terminal that created the keys. The commands below use `$MAAS_API_KEY`, so you select a department by pointing it at one of the two keys. Run Steps 1–3 with the department-a key, then again with the department-b key. Client TLS is already configured from the key setup. If a key is lost, recreate that subscription's key in [Create demonstration API keys](../chapter-3/api-keys.md).
+Use the same terminal that created the keys. The commands below use `$MAAS_API_KEY`, so you select a department by pointing it at one of the two keys. Run Steps 1–3 with the department-a key, then again with the department-b key. Client TLS is already configured from the key setup. If a key is lost or expired, recreate it in this terminal:
+
+```bash
+eval "$(./chapter-3/create-api-key.sh department-a)"
+eval "$(./chapter-3/create-api-key.sh department-b)"
+```
+
+Run only the line for the missing key; the script revokes the old key with the same name.
 
 ## Select the department-a key
 
@@ -73,4 +80,4 @@ export MAAS_API_KEY=$MAAS_API_KEY_B
 
 Repeat [Steps 1–3](#step-1-discover-your-models). Expected: the catalog lists Granite and TinyLlama, Granite returns a greeting, and TinyLlama returns **200**.
 
-Continue to [Chapter 5: Usage and showback](../chapter-5/README.md). After Chapters 5–6, revoke the keys with the [key cleanup](../chapter-3/api-keys.md#cleanup).
+Continue to [Chapter 5: Usage and showback](../chapter-5/README.md). After Chapters 5–6, revoke the keys with the [key cleanup](../chapter-3/README.md#cleanup).

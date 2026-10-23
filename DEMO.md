@@ -1,10 +1,10 @@
 # MaaS demo runbook
 
-Complete [Part 1](README.md#part-1-install-and-configure), including [creating both demonstration keys](chapter-3/api-keys.md), and a rehearsal of Chapters 4–6 before presenting. Operator installation and model image pulls take several minutes; prepare the cluster and showback traffic beforehand. This runbook assumes the same OpenShift AI 3.5 setup and resources as the tutorial.
+Complete [Part 1](README.md#part-1-install-and-configure), including [creating both demonstration keys](chapter-3/README.md#step-7-create-demonstration-api-keys), and a rehearsal of Chapters 4–6 before presenting. Operator installation and model image pulls take several minutes; prepare the cluster and showback traffic beforehand. This runbook assumes the same OpenShift AI 3.5 setup and resources as the tutorial.
 
 ## Prepare
 
-Use Bash from the repository root. Retain the two API keys as `MAAS_API_KEY_A` (standard-plan) and `MAAS_API_KEY_B` (limited-plan). If a key is lost or revoked, recreate it in [Create demonstration API keys](chapter-3/api-keys.md). Keep the keys through the presentation; revoke them afterward.
+Use Bash from the repository root. Retain the two API keys as `MAAS_API_KEY_A` (standard-plan) and `MAAS_API_KEY_B` (limited-plan). If a key is lost or revoked, recreate it with `eval "$(./chapter-3/create-api-key.sh department-a)"` or `eval "$(./chapter-3/create-api-key.sh department-b)"`. Keep the keys through the presentation; revoke them afterward.
 
 ```bash
 : "${MAAS_API_KEY_A:?Export the department-a key}"
@@ -26,7 +26,7 @@ oc wait tokenratelimitpolicy/maas-trlp-tinyllama -n ai-models \
   --for=jsonpath='{.spec.limits.*.rates[0].limit}'=1000 --timeout=10s
 ```
 
-All checks must pass. If TinyLlama is still at 100 tokens/minute, use [Chapter 6's quota restoration](chapter-6/README.md#step-4-restore-the-demo-quota), then allow at least 65 seconds without TinyLlama traffic. Verify [observability setup](chapter-3/observability.md), including `captureUser: true`, run [Chapter 5's comparable usage traffic](chapter-5/README.md#step-1-generate-comparable-usage), and allow another 1–2 minutes for metrics. Confirm nonzero values before starting the presentation.
+All checks must pass. If TinyLlama is still at 100 tokens/minute, use [Chapter 6's quota restoration](chapter-6/README.md#step-4-restore-the-demo-quota), then allow at least 65 seconds without TinyLlama traffic. Verify the [observability setup](chapter-3/README.md#step-5-enable-the-labels-required-by-usage), including `captureUser: true`, run [Chapter 5's comparable usage traffic](chapter-5/README.md#step-1-generate-comparable-usage), and allow another 1–2 minutes for metrics. Confirm nonzero values before starting the presentation.
 
 Find the OpenShift AI dashboard address (`https://rh-ai.apps.<cluster-domain>`):
 
@@ -47,6 +47,6 @@ Open OpenShift AI as an administrator at **Settings → MaaS governance**, and k
 
 ## Finish or repeat
 
-Restore TinyLlama to 1,000 tokens/minute using [Chapter 6, Step 4](chapter-6/README.md#step-4-restore-the-demo-quota) if you have not already, and wait for the budget window to expire. Keep the keys if another presentation is planned; otherwise revoke the tutorial test keys in **Gen AI Studio → API Keys**. If PostgreSQL's demo pod was replaced, its nonpersistent database may have lost the key records; recreate keys before the next run.
+Restore TinyLlama to 1,000 tokens/minute using [Chapter 6, Step 4](chapter-6/README.md#step-4-restore-the-demo-quota) if you have not already, and wait for the budget window to expire. Keep the keys if another presentation is planned; otherwise revoke the tutorial test keys in **Gen AI Studio → API Keys**. If PostgreSQL's demo pod was replaced, its nonpersistent database may have lost the key records; recreate both keys with `chapter-3/create-api-key.sh` before the next run.
 
-Use the [key cleanup](chapter-3/api-keys.md#cleanup) to verify both revocations. The two models and operators remain running so the demo can be repeated. The [known issues](KNOWN-ISSUES.md) cover the streaming workaround for OpenShift AI 3.5.1 and earlier and the missing Usage-tab startup race.
+Use the [key cleanup](chapter-3/README.md#cleanup) to verify both revocations. The two models and operators remain running so the demo can be repeated. The [known issues](KNOWN-ISSUES.md) cover the streaming workaround for OpenShift AI 3.5.1 and earlier and the missing Usage-tab startup race.

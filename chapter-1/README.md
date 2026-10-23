@@ -274,7 +274,7 @@ oc rollout status deployment/maas-api -n redhat-ai-gateway-infra --timeout=300s
 
 ### MaaS telemetry
 
-Enable Kuadrant observability and tenant telemetry before models or subscriptions, so gateway Wasm filters are wired from the first request. This patch does not set `captureUser`; [Configure observability](../chapter-3/observability.md) enables it later, and rerunning this patch does not disable it.
+Enable Kuadrant observability and tenant telemetry before models or subscriptions, so gateway Wasm filters are wired from the first request. This patch does not set `captureUser`; [Chapter 3's observability setup](../chapter-3/README.md#step-4-enable-the-openshift-ai-metrics-stack) enables it later, and rerunning this patch does not disable it.
 
 ```bash
 oc patch kuadrant kuadrant -n kuadrant-system \
@@ -408,7 +408,7 @@ Both services must be listed. They may not be `Ready` yet; do not wait here. Con
 
 ## Client TLS
 
-The curl commands from [Create demonstration API keys](../chapter-3/api-keys.md) onward verify the gateway certificate by default. If the workstation already trusts the issuing CA, no extra curl options are needed. Otherwise export `CURL_CA_BUNDLE` to the CA file's absolute path.
+The curl commands from [Create demonstration API keys](../chapter-3/README.md#step-7-create-demonstration-api-keys) onward verify the gateway certificate by default. If the workstation already trusts the issuing CA, no extra curl options are needed. Otherwise export `CURL_CA_BUNDLE` to the CA file's absolute path.
 
 For an isolated demo with an untrusted certificate, `curl -k` skips verification. Use it only as an explicit shortcut.
 

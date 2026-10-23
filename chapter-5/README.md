@@ -1,6 +1,6 @@
 # Part 2 — Chapter 5: Observe usage and export showback
 
-**Role:** AI ops administrator. Complete [Chapter 4](../chapter-4/README.md) first. Operators, labels, storage, and dashboards were configured in [Configure observability](../chapter-3/observability.md).
+**Role:** AI ops administrator. Complete [Chapter 4](../chapter-4/README.md) first. Operators, labels, storage, and dashboards were configured in [Chapter 3's observability setup](../chapter-3/README.md#step-4-enable-the-openshift-ai-metrics-stack).
 
 Compare token consumption by model and subscription. Mapping (cost centers come from each subscription's `tokenMetadata`): `standard-plan` → `department-a` / `CC-1001`, `limited-plan` → `department-b` / `CC-2001`. The dashboard filters on subscriptions, not OpenShift group names.
 
@@ -9,7 +9,7 @@ Compare token consumption by model and subscription. Mapping (cost centers come 
 
 ## Step 1: Generate comparable usage
 
-Use the two keys from [creating demonstration API keys](../chapter-3/api-keys.md). Create three usage series: department-a on Granite, and department-b on Granite and TinyLlama. First seed each series so monitoring can establish a counter baseline:
+Use the two keys from [creating demonstration API keys](../chapter-3/README.md#step-7-create-demonstration-api-keys). Create three usage series: department-a on Granite, and department-b on Granite and TinyLlama. First seed each series so monitoring can establish a counter baseline:
 
 ```bash
 : "${ROUTE_HOST:?Set the gateway hostname}"
@@ -97,7 +97,7 @@ oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c pr
 
 Expect entries with your username, the two subscription names, and the relevant models. This query shows cumulative counters; the dashboard calculates increases over the selected time range. Raw user-workload Prometheus exposes `authorized_hits`, whereas the AI OpenTelemetry pipeline exposes `authorized_hits_total`. Querying the wrong metric name or monitoring instance can make a healthy pipeline look empty.
 
-If the dashboard is still empty, use the [observability checks](../chapter-3/observability.md) to verify the user label, `limitador-metrics` ServiceMonitor, collector readiness, and time range. Send a second round after the first scrape: `increase()` needs multiple samples. The default dashboard's token chart uses a fixed two-hour increase window in 3.5; use the overview/table and selected time range when checking totals.
+If the dashboard is still empty, use the [observability checks](../chapter-3/README.md#step-4-enable-the-openshift-ai-metrics-stack) to verify the user label, `limitador-metrics` ServiceMonitor, collector readiness, and time range. Send a second round after the first scrape: `increase()` needs multiple samples. The default dashboard's token chart uses a fixed two-hour increase window in 3.5; use the overview/table and selected time range when checking totals.
 
 Proceed to [Chapter 6: Operate token budgets](../chapter-6/README.md) to demonstrate token-budget enforcement and inspect rejection counts and model performance in the built-in OpenShift AI dashboards.
 

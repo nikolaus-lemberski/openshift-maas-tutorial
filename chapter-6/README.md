@@ -12,24 +12,28 @@ Demonstrate token-budget enforcement in the same Usage UI from Chapter 5:
 
 ## Before you begin
 
-Use the same terminal as Chapters 4–5. Inference uses the department-b key from [creating demonstration API keys](../chapter-3/api-keys.md):
+Use the same terminal as Chapters 4–5. Inference uses the department-b key from [Chapter 3](../chapter-3/README.md#step-7-create-demonstration-api-keys). If that key was lost, expired, or revoked, recreate it first:
+
+```bash
+eval "$(./chapter-3/create-api-key.sh department-b)"
+```
+
+The script adds you to `department-b`, waits until MaaS lists `limited-plan`, and revokes the old key before creating a new one. Select the department-b key:
 
 ```bash
 export MAAS_API_KEY=$MAAS_API_KEY_B
 ```
 
-If that key was lost, expired, or revoked, recreate the `limited-plan` key in [Create demonstration API keys](../chapter-3/api-keys.md). A subscription-resolution error means MaaS does not see your `department-b` group membership; wait about a minute after adding the group, then create a fresh key.
-
 ## Step 1: Verify telemetry
 
-Chapter 1 and [Configure observability](../chapter-3/observability.md) enabled Kuadrant observability, tenant telemetry, and user labels on the gateway. Confirm the resources are still present before generating traffic:
+Chapter 1 and [Chapter 3's observability setup](../chapter-3/README.md#step-4-enable-the-openshift-ai-metrics-stack) enabled Kuadrant observability, tenant telemetry, and user labels on the gateway. Confirm the resources are still present before generating traffic:
 
 ```bash
 oc get podmonitor kuadrant-limitador-monitor -n kuadrant-system
 oc get telemetrypolicy maas-telemetry -n openshift-ingress
 ```
 
-If either resource is missing, re-run [MaaS telemetry](../chapter-1/README.md#maas-telemetry) from Chapter 1 and restart the gateway. Then reapply the [user-label configuration](../chapter-3/observability.md#step-2-enable-the-labels-required-by-usage) so the Usage dashboard continues to receive labeled traffic.
+If either resource is missing, re-run [MaaS telemetry](../chapter-1/README.md#maas-telemetry) from Chapter 1 and restart the gateway. Then reapply the [user-label configuration](../chapter-3/README.md#step-5-enable-the-labels-required-by-usage) so the Usage dashboard continues to receive labeled traffic.
 
 Open **OpenShift AI → Observe & monitor → Dashboard → Usage** before the test. Select **Last 30 minutes**, the `limited-plan` subscription, and **Model → All**. Refresh and note the current **Total tokens** and **Total rate limited** values so you can compare them after the burst.
 
@@ -241,7 +245,7 @@ oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c pr
   | jq '.data.result'
 ```
 
-A positive cumulative count with zero increase matches the baseline case described above. No cumulative series after collection calls for checking the `limitador-metrics` ServiceMonitor and AI collector from [Configure observability](../chapter-3/observability.md). If the increase is positive but Usage stays at zero, check the dashboard filters and confirm `authorized_hits_total` has matching `user`, `subscription`, and `limitador_namespace` labels for successful traffic in the same period: the shipped dashboard joins rejection counts to those token-usage series to apply its Model filter.
+A positive cumulative count with zero increase matches the baseline case described above. No cumulative series after collection calls for checking the `limitador-metrics` ServiceMonitor and AI collector from [Chapter 3's observability setup](../chapter-3/README.md#step-4-enable-the-openshift-ai-metrics-stack). If the increase is positive but Usage stays at zero, check the dashboard filters and confirm `authorized_hits_total` has matching `user`, `subscription`, and `limitador_namespace` labels for successful traffic in the same period: the shipped dashboard joins rejection counts to those token-usage series to apply its Model filter.
 
 ## Step 4: Restore the demo quota
 
@@ -265,7 +269,7 @@ The traffic command in Step 5 first waits for the one-minute budget window to re
 
 ## Step 5: Explore built-in model observability
 
-Stay in **OpenShift AI → Observe & monitor → Dashboard**. These views use the metrics stack from [Configure observability](../chapter-3/observability.md):
+Stay in **OpenShift AI → Observe & monitor → Dashboard**. These views use the metrics stack from [Chapter 3's observability setup](../chapter-3/README.md#step-4-enable-the-openshift-ai-metrics-stack):
 
 | View | What to demonstrate |
 |---|---|
@@ -305,4 +309,4 @@ Do not add a second scrape of the same model to fix an empty chart; diagnose the
 
 ## Revoke the test API keys
 
-Once all exercises and presentations are finished, revoke both keys using the [key cleanup](../chapter-3/api-keys.md#cleanup) and confirm **403**. Historical usage metrics remain available.
+Once all exercises and presentations are finished, revoke both keys using the [key cleanup](../chapter-3/README.md#cleanup) and confirm **403**. Historical usage metrics remain available.

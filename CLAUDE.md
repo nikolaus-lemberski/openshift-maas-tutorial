@@ -8,7 +8,7 @@ A step-by-step tutorial for setting up a governed AI platform on OpenShift AI us
 Part 1: Install and configure (administrator)
 chapter-1/   Base infrastructure and early model start; check-prereqs.sh before install
 chapter-2/   Groups and initial governance
-chapter-3/   Register both models, complete governance, wait for readiness; then observability.md and api-keys.md
+chapter-3/   Register both models, complete governance, wait for readiness, observability, demonstration API keys (create-api-key.sh)
 
 Part 2: Use MaaS (administrator as both departments)
 chapter-4/   Discovery, inference, and selective access with the two demonstration keys
@@ -16,7 +16,7 @@ chapter-5/   AI ops usage/showback (Technology Preview); no installation
 chapter-6/   AI ops quota tuning, HTTP 429s, and model observability
 ```
 
-Each chapter has a `README.md` with prose and copy-pasteable commands. Follow the root README reading order. YAML lives in the chapter that applies it: Chapter 1 owns model connections/services and observability operators; Chapter 2 owns initial governance; Chapter 3 owns both MaaSModelRefs and the TinyLlama governance updates. Observability operators stay in `chapter-1/` YAML and are applied from `chapter-3/observability.md`. Part 2 chapters are README-only. The default walkthrough uses the logged-in administrator as both departments. Chapter 4 uses the two keys from `chapter-3/api-keys.md` and does not change groups or deploy resources.
+Each chapter has exactly one `README.md` with prose and copy-pasteable commands; do not split a chapter into extra Markdown pages, because readers only look for `README.md`. Follow the root README reading order. YAML lives in the chapter that applies it: Chapter 1 owns model connections/services and observability operators; Chapter 2 owns initial governance; Chapter 3 owns both MaaSModelRefs and the TinyLlama governance updates. Observability operators stay in `chapter-1/` YAML and are applied from Chapter 3. Part 2 chapters have no YAML. The default walkthrough uses the logged-in administrator as both departments. Chapter 4 uses the two keys from Chapter 3, Step 7 and does not deploy resources. `chapter-3/create-api-key.sh` creates or recreates a key and prints `export` lines; later chapters show `eval "$(./chapter-3/create-api-key.sh department-x)"` inline instead of linking back to Chapter 3.
 
 ## Writing conventions
 

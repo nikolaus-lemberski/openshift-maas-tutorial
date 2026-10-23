@@ -37,7 +37,7 @@ The AI monitoring pipeline exposes `authorized_hits_total` and `limited_calls_to
 
 `MonitoringStackAvailable` and `PersesAvailable` can become True on `default-dsci` before the Prometheus and Perses PVCs bind. Wait for those PVCs and the Prometheus/Perses pods; do not treat the DSCI conditions alone as a ready stack.
 
-If MaaS creates its dashboard before the Perses backend starts, the dashboard can retain a `PersesBackendError` condition and the Usage tab is absent. After waiting for the backend, adding/updating an annotation on the dashboard successfully retriggered reconciliation on the validation cluster. [Configure observability](chapter-3/observability.md) includes the checks and workaround.
+If MaaS creates its dashboard before the Perses backend starts, the dashboard can retain a `PersesBackendError` condition and the Usage tab is absent. After waiting for the backend, adding/updating an annotation on the dashboard successfully retriggered reconciliation on the validation cluster. [Chapter 3, Step 5](chapter-3/README.md#step-5-enable-the-labels-required-by-usage) includes the checks and workaround.
 
 The shipped dashboard excludes series with an empty user label. Enabling user capture affects new traffic only. `increase()` also needs multiple samples: a first successful request can establish a baseline while the displayed total remains zero.
 

@@ -52,11 +52,9 @@ This is a **3.5** walkthrough. Configuration paths differ from the 3.4 documenta
 | 1 | [Install the base infrastructure](chapter-1/README.md) | Operators, Gateway, Authorino TLS, PostgreSQL, MaaS API, and base telemetry configured |
 | 2 | [Start the model downloads](chapter-1/README.md#start-the-model-downloads) | Both model services submitted; downloads and initialization continue during governance setup |
 | 3 | [Configure groups and governance](chapter-2/README.md) | Department groups, subscriptions, and authorization policies created |
-| 4 | [Finish model publishing and verify readiness](chapter-3/README.md) | Both models registered and ready, with the final department access matrix configured |
-| 5 | [Configure observability](chapter-3/observability.md) | Metrics operators, storage, user labels, Usage dashboard, and connection details |
-| 6 | [Create demonstration API keys](chapter-3/api-keys.md) | One key per subscription, retained for Chapter 4 |
+| 4 | [Publish models, configure observability, and create API keys](chapter-3/README.md) | Both models registered and ready, final access matrix configured, Usage dashboard available, and one API key per subscription retained for Part 2 |
 
-Steps 1–2 are Chapter 1, step 3 is Chapter 2, and steps 4–6 are the three pages of Chapter 3. Step 2 submits the model services without waiting for readiness; Kubernetes downloads and starts them while you configure groups and governance in step 3. Step 4 registers the models with MaaS and checks readiness.
+Steps 1–2 are Chapter 1, step 3 is Chapter 2, and step 4 is Chapter 3. Step 2 submits the model services without waiting for readiness; Kubernetes downloads and starts them while you configure groups and governance in step 3. Chapter 3 registers the models with MaaS, checks readiness, enables observability, and creates the demonstration keys.
 
 Part 1 is complete when both models and governance resources are ready, the Usage dashboard is available, and both demonstration keys exist. Operator readiness alone is not enough.
 
@@ -70,5 +68,5 @@ Part 1 is complete when both models and governance resources are ready, the Usag
 | 2 | [Observe usage and export showback](chapter-5/README.md) | Subscription and model usage compared, with usage CSV exported (Technology Preview) |
 | 3 | [Operate token budgets](chapter-6/README.md) | Quota adjusted, 429 responses and metrics verified, and quota restored |
 
-Keep the keys through showback, quota exercises, or a presentation, then revoke them with the [key cleanup](chapter-3/api-keys.md#cleanup).
+Keep the keys through showback, quota exercises, or a presentation, then revoke them with the [key cleanup](chapter-3/README.md#cleanup).
 
