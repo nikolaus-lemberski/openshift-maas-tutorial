@@ -1,42 +1,36 @@
-# Chapter 2: Governance Setup
+# Part 1 — Chapter 2: Configure groups and governance
 
-Before deploying any models, we establish the governance layer that controls **who** can access **which** models and **how much** they can consume.
+**Role:** cluster administrator. Complete [Chapter 1](../chapter-1/README.md), including [starting the model downloads](../chapter-1/README.md#start-the-model-downloads), first.
 
-OpenShift AI MaaS uses two custom resources working together:
+While the models initialize, configure **who** can access **which** models and **how much** they can consume. `ai-models` and both model services already exist; do not wait for readiness here.
 
 | Resource | Purpose |
 |---|---|
-| **MaaSSubscription** | Defines token quotas — which models a group can use and at what rate |
-| **MaaSAuthPolicy** | Grants network access — physically authorizes traffic through the API gateway |
+| **MaaSSubscription** | Token quotas: which models a group can use and at what rate |
+| **MaaSAuthPolicy** | Authorizes requests to those model endpoints |
 
-> **Both are required.** A subscription without an auth policy results in `403 Forbidden` errors.
+> [!IMPORTANT]
+> Both are required. A subscription without an auth policy results in `403 Forbidden`.
 
-## Step 1: Create the OpenShift Groups
+## Step 1: Create the OpenShift groups
 
-Create two department groups:
+Create two department groups and add the logged-in administrator to both. This walkthrough uses one administrator identity for both departments. Each API key you create later is bound to one subscription, so membership in both groups does not merge the two access levels.
 
 ```bash
 oc adm groups new department-a
 oc adm groups new department-b
+oc adm groups add-users department-a "$(oc whoami)"
+oc adm groups add-users department-b "$(oc whoami)"
 ```
 
-Add your current user to `department-a`:
+## Step 2: Deploy the subscriptions
 
-```bash
-oc adm groups add-users department-a $(oc whoami)
-```
+Each department gets a subscription with different **per-user, per-subscription, per-model** token limits. Multiple keys for the same user share that budget; a new key does not reset it.
 
-## Step 2: Create the Models Namespace
+`priority` chooses the default subscription only when a key is created without naming one.
 
-```bash
-oc new-project ai-models
-```
-
-## Step 3: Deploy the Subscriptions
-
-Each department gets a subscription with different token limits. The `priority` field determines which subscription takes precedence when a user belongs to multiple groups.
-
-> **Note:** The subscriptions reference `granite-2b` which doesn't exist yet. They will show a `Failed` phase — this is expected and resolves automatically once the model is deployed in Chapter 3.
+> [!NOTE]
+> The `granite-2b` model service is submitted, but its `MaaSModelRef` is created in Chapter 3. Subscriptions can show `Failed` until that reference exists. That does not stop the backend download.
 
 ```bash
 oc apply -f chapter-2/subscriptions.yml
@@ -52,11 +46,33 @@ Expected output:
 
 ```
 NAME            PHASE    PRIORITY   AGE
-standard-plan   Failed   50         8s
 limited-plan    Failed   10         8s
+standard-plan   Failed   50         8s
 ```
 
-## Step 4: Deploy the Authorization Policies
+Inspect the reason before accepting this temporary state:
+
+```bash
+oc get maassubscription standard-plan limited-plan -n models-as-a-service -o json \
+  | jq '.items[] | {name: .metadata.name, phase: .status.phase, ready: (.status.conditions[]? | select(.type=="Ready") | .message), models: [.status.modelRefStatuses[]? | .message]}'
+```
+
+Expected for each subscription:
+
+```
+{
+  "name": "...",
+  "phase": "Failed",
+  "ready": "all 1 model references are invalid or unavailable",
+  "models": [
+    "MaaSModelRef ai-models/granite-2b not found"
+  ]
+}
+```
+
+Continue only if `models` identifies the `ai-models/granite-2b` MaaS model reference as missing or not ready. Authentication, admission, or other reconciliation errors need resolving now. A `Failed` phase alone is insufficient evidence of the expected dependency.
+
+## Step 3: Deploy the authorization policies
 
 ```bash
 oc apply -f chapter-2/auth-policies.yml
@@ -72,19 +88,25 @@ Expected output:
 
 ```
 NAME              PHASE    AGE
-standard-access   Failed   9s
 limited-access    Failed   9s
+standard-access   Failed   9s
 ```
 
-The `Failed` state is expected — it resolves once the referenced model is deployed.
+Immediately after apply, the policies can show `Pending` for several seconds while the gateway `AuthPolicy` `maas-gateway-auth` catches up to a new generation. Re-check until both are `Failed`.
+
+Check the authorization policy conditions too:
+
+```bash
+oc get maasauthpolicy standard-access limited-access -n models-as-a-service -o json \
+  | jq '.items[] | {name: .metadata.name, phase: .status.phase, ready: (.status.conditions[]? | select(.type=="Ready") | .message)}'
+```
+
+Expected `ready` message for both: `all 1 model references are invalid or missing`. Authorization policies do not list per-model status; that message (the single Granite reference) is the only failure expected at this point. Chapter 3 registers both models and waits for the model services, policies, and subscriptions to become ready.
 
 ## Verification
 
 ```bash
-echo "=== Groups ===" && \
-oc get groups | grep department && \
-echo "=== department-a Membership ===" && \
-oc get group department-a -o jsonpath='{.users[*]}' && echo
+oc get groups department-a department-b
 ```
 
-Confirm your groups exist and your username appears under `department-a`. Then proceed to [Chapter 3](../chapter-3/README.md).
+Confirm both groups exist and list your username. Continue to [Chapter 3](../chapter-3/README.md).

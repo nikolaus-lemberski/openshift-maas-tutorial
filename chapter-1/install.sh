@@ -6,9 +6,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 usage() {
   cat <<'EOF'
 Usage: ./chapter-1/install.sh [options]
-  --check-only             Check platform prerequisites without changing the cluster
+  --check-only             Same as ./chapter-1/check-prereqs.sh
   --scale-down-demo-model  Stop the Demo Platform's default Llama deployment
   --gpu-time-slicing       Configure two shared GPU slots using the supplied L4 config
+  --with-models            Submit Granite and TinyLlama after verification
   --help                   Show this help
 
 Requires OpenShift 4.20.x, OpenShift AI 3.5.x, cluster-admin access,
@@ -20,62 +21,30 @@ EOF
 check_only=false
 scale_down=false
 time_slicing=false
+with_models=false
 for arg in "$@"; do
   case "$arg" in
     --check-only) check_only=true ;;
     --scale-down-demo-model) scale_down=true ;;
     --gpu-time-slicing) time_slicing=true ;;
+    --with-models) with_models=true ;;
     --help|-h) usage; exit 0 ;;
     *) usage >&2; exit 1 ;;
   esac
 done
-if $check_only && { $scale_down || $time_slicing; }; then
-  echo '--check-only cannot be combined with options that change GPU workloads' >&2
+if $check_only && { $scale_down || $time_slicing || $with_models; }; then
+  echo '--check-only cannot be combined with options that change the cluster' >&2
   exit 1
 fi
+if $check_only; then
+  exec bash chapter-1/check-prereqs.sh
+fi
 
+source chapter-1/check-prereqs.sh
 stage='local prerequisites'
 trap 'echo "Chapter 1 stopped during: $stage (line $LINENO). Resolve the error above, then rerun the script." >&2' ERR
-step() { stage=$1; printf '\n=== %s ===\n' "$stage"; }
-die() { echo "$*" >&2; exit 1; }
-
-for tool in oc curl jq envsubst; do
-  command -v "$tool" >/dev/null || die "Required command not found: $tool"
-done
-
-step 'Platform prerequisites'
-oc whoami
-[[ $(oc auth can-i '*' '*' --all-namespaces) == yes ]] || die 'Log in with cluster-admin access'
-oc get datasciencecluster default-dsc
-oc get dscinitialization default-dsci
-oc wait gatewayconfig/default-gateway --for=condition=Ready --timeout=300s
-ocp_version=$(oc get clusterversion version -o jsonpath='{.status.desired.version}')
-rhoai_csv=$(oc get subscription rhods-operator -n redhat-ods-operator -o jsonpath='{.status.installedCSV}')
-[[ -n "$rhoai_csv" ]] || die 'OpenShift AI is not installed yet'
-rhoai_version=$(oc get csv "$rhoai_csv" -n redhat-ods-operator -o jsonpath='{.spec.version}')
-echo "OpenShift $ocp_version; OpenShift AI $rhoai_version"
-[[ "$ocp_version" == 4.20.* && "$rhoai_version" == 3.5.* ]] || die 'This installer targets OpenShift 4.20.x and OpenShift AI 3.5.x'
-oc wait csv "$rhoai_csv" -n redhat-ods-operator --for=jsonpath='{.status.phase}'=Succeeded --timeout=600s
-oc get storageclass -o json | jq -e 'any(.items[];
-  .metadata.annotations["storageclass.kubernetes.io/is-default-class"] == "true" or
-  .metadata.annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true")' >/dev/null \
-  || die 'A default StorageClass is required for Chapter 5'
-export GW_CLASS
-GW_CLASS=$(oc get gatewayclass -o json | jq -er \
-  '[.items[] | select(.spec.controllerName | startswith("openshift.io/gateway-controller")) | .metadata.name] | sort | first // empty') \
-  || die 'No OpenShift GatewayClass found; complete the platform gateway setup first'
-oc wait "gatewayclass/$GW_CLASS" --for=condition=Accepted --timeout=300s
-
-# Reject ambiguous existing operator installations before making changes.
-rhcl=$(oc get subscription -A -o json | jq -c '[.items[] | select(.spec.name == "rhcl-operator")]')
-[[ $(jq 'length' <<< "$rhcl") -le 1 ]] || die 'Multiple RHCL subscriptions found; resolve the installation layout first'
-kuadrant_crd=$(oc get crd kuadrants.kuadrant.io --ignore-not-found -o name)
-if [[ -n "$kuadrant_crd" ]]; then
-  other_kuadrants=$(oc get kuadrant -A -o json | jq -r '.items[] |
-    select(.metadata.namespace != "kuadrant-system" or .metadata.name != "kuadrant") |
-    "\(.metadata.namespace)/\(.metadata.name)"')
-  [[ -z "$other_kuadrants" ]] || die "An existing Kuadrant instance needs administrator review before installing this demo: $other_kuadrants"
-fi
+check_local_tools
+check_platform
 
 step 'GPU prerequisites'
 if $scale_down; then
@@ -92,42 +61,7 @@ if $time_slicing; then
     -p '{"spec":{"devicePlugin":{"config":{"name":"time-slicing-config","default":"l4"}}}}'
   oc rollout status daemonset/nvidia-device-plugin-daemonset -n nvidia-gpu-operator --timeout=300s
 fi
-
-# Count only Ready, uncordoned nodes without scheduling taints. Subtract
-# scheduled requests (including init containers) and pending GPU requests.
-free_gpus() {
-  local nodes requests
-  nodes=$(oc get nodes -o json | jq -c '[.items[] |
-    select(.spec.unschedulable != true) |
-    select(any(.status.conditions[]; .type == "Ready" and .status == "True")) |
-    select(all(.spec.taints[]?; .effect != "NoSchedule" and .effect != "NoExecute")) |
-    {name: .metadata.name, capacity: ((.status.allocatable["nvidia.com/gpu"] // "0") | tonumber)}]')
-  requests=$(oc get pods -A -o json | jq -c '[.items[] |
-    select(.status.phase != "Succeeded" and .status.phase != "Failed") |
-    {node: (.spec.nodeName // ""), gpu: ([
-      ([.spec.containers[]? | (.resources.requests["nvidia.com/gpu"] // .resources.limits["nvidia.com/gpu"] // "0") | tonumber] | add // 0),
-      (.spec.initContainers[]? | (.resources.requests["nvidia.com/gpu"] // .resources.limits["nvidia.com/gpu"] // "0") | tonumber)
-    ] | max)}]')
-  jq -nr --argjson nodes "$nodes" --argjson requests "$requests" '
-    ([$nodes[] | . as $n |
-      ([$requests[] | select(.node == $n.name) | .gpu] | add // 0) as $used |
-      [0, ($n.capacity - $used)] | max] | add // 0) -
-    ([$requests[] | select(.node == "") | .gpu] | add // 0)'
-}
-free=$(free_gpus)
-# The device plugin advertises shared slots asynchronously after its restart.
-if $time_slicing || $scale_down; then
-  for ((attempt=0; attempt<60 && free<2; attempt++)); do
-    sleep 5
-    free=$(free_gpus)
-  done
-fi
-echo "Unreserved GPU slots on schedulable nodes: $free"
-[[ "$free" -ge 2 ]] || die 'Two free GPU slots are required. Free other GPU workloads, or use the explicit demo-model/time-slicing options; see Chapter 1.'
-if $check_only; then
-  echo 'Platform pre-check passed. Run without --check-only to install Chapter 1.'
-  exit 0
-fi
+check_gpus
 
 step 'Connectivity Link and Kuadrant'
 if [[ $(jq 'length' <<< "$rhcl") == 0 ]]; then
@@ -203,7 +137,7 @@ oc wait maastenantconfig/default-tenant -n models-as-a-service --for=condition=R
 oc wait --for=create deployment/maas-api -n redhat-ai-gateway-infra --timeout=300s
 oc rollout status deployment/maas-api -n redhat-ai-gateway-infra --timeout=600s
 oc patch kuadrant kuadrant -n kuadrant-system --type=merge -p '{"spec":{"observability":{"enable":true}}}'
-# Preserve any user/group capture enabled in later chapters on a rerun.
+# Preserve any user/group capture enabled by the observability setup on a rerun.
 oc patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
   -p '{"spec":{"telemetry":{"enabled":true,"metrics":{"captureOrganization":true,"captureModelUsage":true}}}}'
 oc wait --for=create telemetrypolicy/maas-telemetry -n openshift-ingress --timeout=300s
@@ -221,4 +155,17 @@ oc wait route/openshift-ai-inference -n openshift-ingress --for=jsonpath='{.stat
 step 'Final verification'
 bash chapter-1/7-verify-maas.sh
 echo "Inference endpoint: https://$ROUTE_HOST"
-echo 'Chapter 1 complete. Continue with chapter-2/README.md.'
+if $with_models; then
+  step 'Start model downloads'
+  oc wait authpolicy/maas-gateway-auth tokenratelimitpolicy/gateway-default-deny \
+    -n openshift-ingress --for=condition=Enforced --timeout=300s
+  oc create namespace ai-models --dry-run=client -o yaml | oc apply -f -
+  oc apply -f chapter-1/granite-data-connection.yml \
+    -f chapter-1/tinyllama-data-connection.yml
+  oc apply -f chapter-1/granite-inference-service.yml \
+    -f chapter-1/tinyllama-inference-service.yml
+  oc get llminferenceservice granite-2b tinyllama -n ai-models
+  echo 'Chapter 1 complete. Both model services submitted; continue with Chapter 2.'
+else
+  echo 'Chapter 1 complete. Continue with starting the model downloads in chapter-1/README.md.'
+fi

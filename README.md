@@ -2,15 +2,17 @@
 
 This tutorial walks you through setting up a fully governed AI platform using OpenShift AI's Models as a Service (MaaS) capabilities. Two departments (`department-a` and `department-b`) get different levels of access and token quotas to shared AI models.
 
-Tested on OpenShift AI **3.5.1**, OpenShift **4.20.41**, and Red Hat Connectivity Link **1.4.3**. OpenShift AI is a prerequisite; its installed Subscription controls automatic updates.
+Validated on OpenShift AI **3.5.2**, OpenShift **4.20.42**, and Red Hat Connectivity Link **1.4.3**. OpenShift AI is a prerequisite; its installed Subscription controls automatic updates.
 
-Start with [Chapter 1 prerequisites](chapter-1/README.md#prerequisites), then complete Chapters 1–6 in order. Run commands from this repository's root in a Bash shell, keeping the same terminal open so exported API keys carry across chapters. Choose one option where a step offers Dashboard or CLI alternatives. Stop and resolve failed checks before continuing.
+The tutorial has two parts. **Part 1** installs and governs the platform. **Part 2** uses two API keys — one per department — from the same administrator terminal. Stop and resolve failed checks before continuing.
 
 For a repeat presentation after setup, use the [demo runbook](DEMO.md). See [known issues and validation limits](KNOWN-ISSUES.md) for the tested configuration and platform workarounds.
 
-For a demo audience that wants to start with MaaS governance, an admin can run `./chapter-1/install.sh` to configure and verify Chapter 1, then continue with Chapter 2. See the [installer prerequisites and options](chapter-1/README.md#install-for-a-demo).
+The optional `./chapter-1/install.sh` installs the base infrastructure; add `--with-models` to submit both model services. Groups, governance, the AI observability stack, and the demonstration API keys still require the remaining Part 1 steps. See the [installer options](chapter-1/README.md#install-for-a-demo). `./cleanup.sh` removes those tutorial resources without uninstalling OpenShift AI or GPU operators.
 
-## What You'll Build
+This is a **3.5** walkthrough. Configuration paths differ from the 3.4 documentation; see the [version comparison](chapter-1/README.md#version-compatibility).
+
+## What you will build
 
 ```
    department-a          department-b
@@ -41,18 +43,32 @@ For a demo audience that wants to start with MaaS governance, an admin can run `
 >
 > Granite 2B and TinyLlama are small models chosen for the demo to keep GPU requirements low. The same gateway, governance, and observability pattern applies to production workloads with larger models.
 
+## Part 1: Install and configure
 
+**Audience:** cluster administrators, platform engineers, and AI ops administrators. Use an administrator Bash terminal from the repository root. Start with `./chapter-1/check-prereqs.sh`, then follow these steps in order:
 
-## Tutorial Chapters
+| Order | Guide | Outcome |
+|---|---|---|
+| 1 | [Install the base infrastructure](chapter-1/README.md) | Operators, Gateway, Authorino TLS, PostgreSQL, MaaS API, and base telemetry configured |
+| 2 | [Start the model downloads](chapter-1/README.md#start-the-model-downloads) | Both model services submitted; downloads and initialization continue during governance setup |
+| 3 | [Configure groups and governance](chapter-2/README.md) | Department groups, subscriptions, and authorization policies created |
+| 4 | [Finish model publishing and verify readiness](chapter-3/README.md) | Both models registered and ready, with the final department access matrix configured |
+| 5 | [Configure observability](chapter-3/observability.md) | Metrics operators, storage, user labels, Usage dashboard, and connection details |
+| 6 | [Create demonstration API keys](chapter-3/api-keys.md) | One key per subscription, retained for Chapter 4 |
 
+Steps 1–2 are Chapter 1, step 3 is Chapter 2, and steps 4–6 are the three pages of Chapter 3. Step 2 submits the model services without waiting for readiness; Kubernetes downloads and starts them while you configure groups and governance in step 3. Step 4 registers the models with MaaS and checks readiness.
 
-| Chapter                  | Topic                             | What you'll do                                                       |
-| ------------------------ | --------------------------------- | -------------------------------------------------------------------- |
-| [1](chapter-1/README.md) | **Infrastructure Setup**          | Install operators, configure gateway, enable MaaS API layer          |
-| [2](chapter-2/README.md) | **Governance**                    | Create groups, subscriptions, and authorization policies             |
-| [3](chapter-3/README.md) | **Model Deployment**              | Deploy Granite 2B via LLMInferenceService                            |
-| [4](chapter-4/README.md) | **API Access & Multi-Model**      | Generate API keys, deploy TinyLlama, configure selective access      |
-| [5](chapter-5/README.md) | **Usage & Showback (Technology Preview)** | Embedded OpenShift AI dashboard, per-model and subscription usage, CSV export |
-| [6](chapter-6/README.md) | **Observability & Rate Limiting** | Demonstrate token limits, HTTP 429s, and built-in AI observability |
+Part 1 is complete when both models and governance resources are ready, the Usage dashboard is available, and both demonstration keys exist. Operator readiness alone is not enough.
 
+## Part 2: Use MaaS
+
+**Audience:** the same administrator, acting as a model consumer and then as AI ops. Start here after both demonstration keys exist.
+
+| Order | Guide | Outcome |
+|---|---|---|
+| 1 | [Use your API keys](chapter-4/README.md) | Model discovery, inference, and selective access verified for both departments |
+| 2 | [Observe usage and export showback](chapter-5/README.md) | Subscription and model usage compared, with usage CSV exported (Technology Preview) |
+| 3 | [Operate token budgets](chapter-6/README.md) | Quota adjusted, 429 responses and metrics verified, and quota restored |
+
+Keep the keys through showback, quota exercises, or a presentation, then revoke them with the [key cleanup](chapter-3/api-keys.md#cleanup).
 

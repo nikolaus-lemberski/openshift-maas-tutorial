@@ -93,7 +93,7 @@ elif a[0] == 'apply' and a[-1] == '-':
 
 
 class InstallerTest(unittest.TestCase):
-    def run_installer(self, scenario='healthy', *args):
+    def run_script(self, relpath, scenario='healthy', *args):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             fake_oc = directory / 'oc'
@@ -105,18 +105,23 @@ class InstallerTest(unittest.TestCase):
             log = directory / 'calls'
             env = dict(os.environ, PATH=f'{directory}:{os.environ["PATH"]}',
                        SCENARIO=scenario, CALL_LOG=str(log))
-            result = subprocess.run(['bash', str(ROOT / 'chapter-1/install.sh'), *args],
+            result = subprocess.run(['bash', str(ROOT / relpath), *args],
                                     cwd=directory, env=env, text=True, capture_output=True, timeout=30)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
             return result, calls
+
+    def run_installer(self, scenario='healthy', *args):
+        return self.run_script('chapter-1/install.sh', scenario, *args)
 
     def test_install_and_verify_from_another_working_directory(self):
         result, calls = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Chapter 1 complete.', result.stdout)
+        self.assertIn('starting the model downloads in chapter-1/README.md', result.stdout)
         self.assertFalse(any(c[:2] == ['delete', 'pod'] for c in calls))
         self.assertFalse(any(c[0] == 'scale' or c[:2] == ['patch', 'clusterpolicy'] for c in calls))
         self.assertFalse(any('chapter-1/0-connectivity-link.yml' in c for c in calls))
+        self.assertFalse(any('granite-inference-service.yml' in c for c in calls))
         patches = [json.loads(c[c.index('-p') + 1]) for c in calls
                    if c[:3] == ['patch', 'configmap', 'cluster-monitoring-config']]
         self.assertEqual(patches[0]['data']['config.yaml'],
@@ -172,6 +177,14 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(any(c[0] in ['apply', 'patch', 'create', 'delete', 'scale'] for c in calls))
         self.assertNotIn('Chapter 1 complete.', result.stdout)
+        self.assertIn('Platform pre-check passed', result.stdout)
+
+    def test_check_prereqs_script_is_read_only(self):
+        result, calls = self.run_script('chapter-1/check-prereqs.sh')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Platform pre-check passed', result.stdout)
+        self.assertFalse(any(c[0] in ['apply', 'patch', 'create', 'delete', 'scale'] for c in calls))
+        self.assertNotIn('Chapter 1 complete.', result.stdout)
 
     def test_log_read_failure_prevents_instance_creation(self):
         result, calls = self.run_installer('logs-failure')
@@ -203,10 +216,23 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(any(c[:2] == ['patch', 'clusterpolicy'] for c in calls))
         self.assertTrue(any(c[:2] == ['scale', 'deployment'] for c in calls))
 
+    def test_with_models_submits_inference_services(self):
+        result, calls = self.run_installer('healthy', '--with-models')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any('chapter-1/granite-data-connection.yml' in c for c in calls))
+        self.assertTrue(any('chapter-1/tinyllama-data-connection.yml' in c for c in calls))
+        self.assertTrue(any('chapter-1/granite-inference-service.yml' in c for c in calls))
+        self.assertTrue(any('chapter-1/tinyllama-inference-service.yml' in c for c in calls))
+        self.assertIn('Both model services submitted', result.stdout)
+        self.assertNotIn('starting the model downloads in chapter-1/README.md', result.stdout)
+
     def test_check_only_rejects_mutating_options(self):
-        result, calls = self.run_installer('healthy', '--check-only', '--gpu-time-slicing')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(calls, [])
+        for flag in ['--gpu-time-slicing', '--scale-down-demo-model', '--with-models']:
+            with self.subTest(flag=flag):
+                result, calls = self.run_installer('healthy', '--check-only', flag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+                self.assertIn('cannot be combined', result.stderr)
 
 
 if __name__ == '__main__':

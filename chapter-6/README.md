@@ -1,75 +1,41 @@
-# Chapter 6: Observability & Rate Limiting
+# Part 2 — Chapter 6: Operate token budgets
 
-Chapter 5 covered token consumption and showback in the embedded OpenShift AI Usage dashboard. Now demonstrate token-budget enforcement and inspect the results in the same UI. In this chapter you'll:
+**Role:** AI ops administrator with cluster-admin access. Complete [Chapter 5](../chapter-5/README.md) first.
 
-1. Verify telemetry for token tracking
-2. Tighten token limits and demonstrate HTTP `429` responses
-3. Compare consumption and rate-limit rejections in OpenShift AI
-4. Explore the built-in model performance dashboards
+Demonstrate token-budget enforcement in the same Usage UI from Chapter 5:
 
-## Before You Begin
+1. Verify telemetry
+2. Tighten TinyLlama and demonstrate HTTP `429`
+3. Compare consumption and rejections
+4. Restore the demo quota
+5. Explore model performance dashboards
 
-Every curl example in this chapter uses a `department-b` API key on the `limited-plan` subscription — that's the plan this chapter tightens and rate-limits. Confirm your user is still in `department-b` from Chapter 4, Step 5:
+## Before you begin
 
-```bash
-oc get groups | grep department
-```
-
-Expected output — your username under `department-b`, not `department-a`:
-
-```
-department-a
-department-b   admin
-```
-
-If your username isn't under `department-b`, move it there:
+Use the same terminal as Chapters 4–5. Inference uses the department-b key from [creating demonstration API keys](../chapter-3/api-keys.md):
 
 ```bash
-oc adm groups remove-users department-a $(oc whoami)
-oc adm groups add-users department-b $(oc whoami)
-```
-
-Reuse the department-b key retained from Chapter 4:
-
-```bash
-export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-: "${MAAS_API_KEY_B:?Set the department-b key saved in Chapter 4}"
 export MAAS_API_KEY=$MAAS_API_KEY_B
 ```
 
-If that key was lost or revoked, or you just changed group membership, create a replacement while in department-b instead:
+If that key was lost, expired, or revoked, recreate the `limited-plan` key in [Create demonstration API keys](../chapter-3/api-keys.md). A subscription-resolution error means MaaS does not see your `department-b` group membership; wait about a minute after adding the group, then create a fresh key.
 
-```bash
-export ROUTE_HOST=$(oc get route openshift-ai-inference -n openshift-ingress -o jsonpath='{.spec.host}')
-MAAS_API_KEY=$(curl -sS -k --fail-with-body --max-time 60 -X POST https://$ROUTE_HOST/maas-api/v1/api-keys \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"department-b-chapter6","subscription":"limited-plan"}' \
-  | jq -er '.key // error(tostring) | select(type == "string" and startswith("sk-oai-"))') && export MAAS_API_KEY
-: "${MAAS_API_KEY:?API key creation failed; check the API response and group membership}"
-export MAAS_API_KEY_B=$MAAS_API_KEY
-```
+## Step 1: Verify telemetry
 
-> **Getting `400 {"code":"invalid_subscription",...}`?** The requested subscription must be accessible to the identity seen by the MaaS API — `standard-plan` is for `department-a`, `limited-plan` for `department-b`. After changing groups, cached authentication can temporarily retain the previous membership. Follow the [Chapter 4 API visibility check](../chapter-4/README.md#move-your-user-to-department-b) and wait until the API reports `limited-plan`, then retry key creation.
-
-Keep `$MAAS_API_KEY` and `$ROUTE_HOST` exported for the rest of this chapter — later steps reference "your department-b key" assuming it's already set.
-
-## Step 1: Verify Telemetry
-
-Chapter 1 enabled Kuadrant observability and tenant telemetry on the gateway. Confirm the resources are still present before generating traffic:
+Chapter 1 and [Configure observability](../chapter-3/observability.md) enabled Kuadrant observability, tenant telemetry, and user labels on the gateway. Confirm the resources are still present before generating traffic:
 
 ```bash
 oc get podmonitor kuadrant-limitador-monitor -n kuadrant-system
 oc get telemetrypolicy maas-telemetry -n openshift-ingress
 ```
 
-If either resource is missing, re-run the [MaaS Telemetry](../chapter-1/README.md#maas-telemetry) section from Chapter 1 and restart the gateway. Then reapply Chapter 5's `captureUser: true` configuration so the Usage dashboard continues to receive labeled traffic.
+If either resource is missing, re-run [MaaS telemetry](../chapter-1/README.md#maas-telemetry) from Chapter 1 and restart the gateway. Then reapply the [user-label configuration](../chapter-3/observability.md#step-2-enable-the-labels-required-by-usage) so the Usage dashboard continues to receive labeled traffic.
 
 Open **OpenShift AI → Observe & monitor → Dashboard → Usage** before the test. Select **Last 30 minutes**, the `limited-plan` subscription, and **Model → All**. Refresh and note the current **Total tokens** and **Total rate limited** values so you can compare them after the burst.
 
-## Step 2: Trigger Rate Limiting
+## Step 2: Trigger rate limiting
 
-Each `MaaSSubscription` defines a per-model **token budget** for a time window. The generated policy on this cluster counts by `auth.identity.userid`: keys for the same user, subscription, and model share a budget. Creating another key does not reset it. When the budget is exhausted the gateway returns `429 Too Many Requests` until the window resets. MaaS translates each `tokenRateLimits` entry into a Kuadrant `TokenRateLimitPolicy` on the model's HTTPRoute. `"stream": true` is required on every request (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)).
+Each `MaaSSubscription` defines a per-user, per-model **token budget**. Keys for the same user share it; a new key does not reset it. Exhausted budgets return `429` until the window resets. On OpenShift AI 3.5.1 and earlier, add `"stream":true` to every request body in this chapter: non-streaming responses through the gateway arrive empty there ([known issue](../KNOWN-ISSUES.md#non-streaming-requests-return-an-empty-body)).
 
 List the policies MaaS created:
 
@@ -84,24 +50,34 @@ oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
   | jq -r '.spec.limits | to_entries[] | "\(.key): \(.value.rates[0].limit) tok / \(.value.rates[0].window)"'
 ```
 
-Expected output — the 1,000 tok/min value from your `MaaSSubscription`:
+Expected output — the 1,000 tok/min value from your `MaaSSubscription`. The limit key name can vary; match on the rate:
 
 ```
-models-as-a-service-limited-plan-tinyllama-tokens: 1000 tok / 1m
+tokens-1000-per-1m: 1000 tok / 1m
 ```
 
-> **Do not edit these resources directly.** The MaaS controller reconciles them from your `MaaSSubscription` definitions. Manual changes will be overwritten.
+> [!IMPORTANT]
+> Do not edit these `TokenRateLimitPolicy` resources directly. The MaaS controller reconciles them from the subscription.
 
-### Tighten the Limit for the Demo
+### Tighten the limit for the demo
 
-The default 1,000 tok/min limit is too high for a quick demo. Lower TinyLlama to **100 tokens per minute** so a single request exhausts the budget and the next request gets a 429:
+Lower TinyLlama to **100 tokens per minute** so one request can exhaust the budget. TinyLlama is the second `modelRefs` entry (`/spec/modelRefs/1`):
 
 ```bash
 oc patch maassubscription limited-plan -n models-as-a-service --type=json \
-  -p='[{"op": "replace", "path": "/spec/modelRefs/1/tokenRateLimits/0/limit", "value": 100}]'
+  -p='[{"op":"replace","path":"/spec/modelRefs/1/tokenRateLimits/0/limit","value":100}]'
 ```
 
-Verify the MaaS controller updated the underlying policy:
+Wait for the MaaS controller to write the new value into the generated policy and for Kuadrant to enforce it:
+
+```bash
+oc wait tokenratelimitpolicy/maas-trlp-tinyllama -n ai-models \
+  --for=jsonpath='{.spec.limits.*.rates[0].limit}'=100 --timeout=120s
+oc wait tokenratelimitpolicy/maas-trlp-tinyllama -n ai-models \
+  --for=condition=Enforced --timeout=120s
+```
+
+Verify the underlying policy:
 
 ```bash
 oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
@@ -111,66 +87,50 @@ oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
 Expected output:
 
 ```
-models-as-a-service-limited-plan-tinyllama-tokens: 100 tok / 1m
-```
-
-Wait for the generated policy to contain the new value and be enforced:
-
-```bash
-oc wait tokenratelimitpolicy/maas-trlp-tinyllama -n ai-models \
-  --for=jsonpath='{.spec.limits.*.rates[0].limit}'=100 --timeout=120s
-oc wait tokenratelimitpolicy/maas-trlp-tinyllama -n ai-models \
-  --for=condition=Enforced --timeout=120s
+tokens-100-per-1m: 100 tok / 1m
 ```
 
 Allow at least 65 seconds without TinyLlama traffic before each independent rate-limit test so the previous one-minute budget expires. A routine quota update is reconciled by the controllers; a gateway restart is a troubleshooting step, not a quota reset.
 
-### Smoke Test with curl
+### Smoke test with curl
 
-Confirm rate limiting works from your workstation. Use your `department-b` limited-plan key — a `department-a` key has no access to TinyLlama. Send one request to consume tokens, then a second request that should be rejected:
+Use the `limited-plan` key. A `department-a` key has no TinyLlama access. Observe Usage and run the `oc` checks in this same terminal.
+
+Send one request to consume tokens, then a second that should be rejected:
 
 ```bash
-curl -s -k -w '\nHTTP:%{http_code}\n' \
+curl -sS --max-time 60 -o /dev/null -w 'HTTP:%{http_code}\n' \
   -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
   -H "Authorization: Bearer $MAAS_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "tinyllama",
-    "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
-    "max_tokens": 200,
-    "stream": true
-  }' | tail -3
+  -H 'Content-Type: application/json' \
+  -d '{"model":"tinyllama","messages":[{"role":"user","content":"Write a short paragraph about the history of bread."}],"max_tokens":200}'
 
-curl -s -k -w '\nHTTP:%{http_code}\n' \
+curl -sS --max-time 60 -o /dev/null -w 'HTTP:%{http_code}\n' \
   -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
   -H "Authorization: Bearer $MAAS_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "tinyllama",
-    "messages": [{"role": "user", "content": "Write a short paragraph about the history of bread."}],
-    "max_tokens": 200,
-    "stream": true
-  }' | tail -1
+  -H 'Content-Type: application/json' \
+  -d '{"model":"tinyllama","messages":[{"role":"user","content":"Write a short paragraph about the history of bread."}],"max_tokens":200}'
 ```
 
-Expected output — first request succeeds, second is rejected:
+Expected:
 
 ```
 HTTP:200
 HTTP:429
 ```
 
-**Before measuring rejections in Usage:** treat the smoke test above as a warm-up. The first `429` creates the rejection counter, and its first collected value becomes the dashboard's baseline. Allow 1–2 minutes for collection before sending another burst. This also lets the one-minute token budget expire. Waiting and refreshing alone will not turn that first rejection into a visible increase.
+Treat that as a warm-up. The first `429` becomes the dashboard baseline; waiting alone does not show an increase. The burst below first waits 90 seconds so metrics are collected and the budget window resets.
 
-Now run the Red Hat quick-test loop (sends 10 rapid requests and counts status codes):
+Send 10 rapid requests and count status codes:
 
 ```bash
+sleep 90
 for i in $(seq 1 10); do
-  curl -s -k -o /dev/null -w "%{http_code}\n" \
+  curl -sS --max-time 60 -o /dev/null -w "%{http_code}\n" \
     -X POST https://$ROUTE_HOST/ai-models/tinyllama/v1/chat/completions \
     -H "Authorization: Bearer $MAAS_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50,"stream":true}'
+    -H 'Content-Type: application/json' \
+    -d '{"model":"tinyllama","messages":[{"role":"user","content":"test"}],"max_tokens":50}'
 done | sort | uniq -c
 ```
 
@@ -181,26 +141,24 @@ Expected output — a mix of `200` and `429`:
    9 429
 ```
 
-Counts are illustrative and depend on generated tokens and the remaining budget. If you run this immediately after the smoke test, all ten requests may return `429`; let the window expire before repeating. If a short completion consumes fewer than 100 tokens, more than one request may succeed.
+Counts depend on generated tokens and remaining budget. Without the wait, all ten may return `429`. A short completion under 100 tokens can allow more than one `200`.
 
-> **What is being limited?** Actual tokens consumed (from `usage.total_tokens` in each response), not request count. Enforcement happens at the gateway — rejected requests never reach the model server.
+> [!NOTE]
+> Limits count actual tokens from `usage.total_tokens`, not request count. Rejected requests never reach the model server.
 
 ### Troubleshooting
 
 If every request returns `200` and you never see a `429`:
 
-1. **Confirm the API key belongs to `limited-plan`.** Keys capture group membership at creation time. If you created the key while still in `department-a`, revoke it and create a new one on the `limited-plan` subscription (Chapter 4, Step 5).
-
-2. **Confirm the limit patch applied:**
+1. **Confirm the key is `limited-plan`.** Keys are bound to the subscription chosen at creation. Recreate the department-b key if you are using the department-a key.
+2. **Confirm the generated policy is `100`:**
 
    ```bash
    oc get tokenratelimitpolicy maas-trlp-tinyllama -n ai-models -o json \
      | jq '.spec.limits[].rates[0].limit'
    ```
 
-   Should print `100`.
-
-3. **Confirm telemetry is enabled and the gateway was restarted** (Chapter 1). Rate limiting depends on the Kuadrant Wasm filters on `maas-default-gateway`:
+3. **Confirm telemetry is Enforced:**
 
    ```bash
    oc get telemetrypolicy maas-telemetry -n openshift-ingress
@@ -208,7 +166,7 @@ If every request returns `200` and you never see a `429`:
      -o jsonpath='{.status.conditions[?(@.type=="Enforced")].status}{"\n"}'
    ```
 
-4. **Check Limitador is receiving traffic** for the TinyLlama route:
+4. **Confirm Limitador sees TinyLlama traffic:**
 
    ```bash
    oc port-forward -n kuadrant-system svc/limitador-limitador 8080:8080 &
@@ -218,30 +176,19 @@ If every request returns `200` and you never see a `429`:
    kill "$LIMITADOR_FORWARD_PID"
    ```
 
-   After the smoke test you should see metrics with `limitador_namespace="ai-models/tinyllama-kserve-route"`. If only `granite-2b` appears, restart the gateway and retry.
+   Look for `limitador_namespace="ai-models/tinyllama-kserve-route"`. If only `granite-2b` appears, restart the gateway and retry.
 
-5. **Check Authorino logs** for subscription metadata errors:
+5. **Check Authorino for `selected_subscription_key`.** Limits are skipped if that metadata is missing:
 
    ```bash
    oc logs -n kuadrant-system deploy/authorino --tail=50 | grep selected_subscription
    ```
 
-   Token rate limits only apply when `auth.identity.selected_subscription_key` matches your plan. If Authorino cannot resolve the subscription, limits are silently skipped.
+   `no such key: selected_subscription` (without `_key`) and `no such key: identity` for the expression `auth.identity.selected_subscription` are benign: they come from metric labels on unauthenticated or denied requests. Investigate only errors that mention `selected_subscription_key` or `subscription-info`.
 
-   > **Note:** Authorino also logs `failed to evaluate CEL expression ... no such key: selected_subscription` (without `_key`) on essentially every request, for every model, even when everything works. That's a separate, benign metric-labeling expression and not evidence of a problem — only investigate further if you see errors that reference `selected_subscription_key` or `subscription-info` itself.
+6. **If steps 1–5 pass and you still only see `200`s**, check gateway logs for `Task failed` and compare RHCL with [known issues](../KNOWN-ISSUES.md#rhcl-142-wasm-task-failure). That 1.4.2 platform bug was not seen on the 1.4.3 validation cluster.
 
-6. **Check for a Kuadrant Wasm shim task failure** — this is the most likely cause if steps 1–5 all check out and you still only see `200`s:
-
-   ```bash
-   GW_POD=$(oc get pods -n openshift-ingress -l 'gateway.networking.k8s.io/gateway-name=maas-default-gateway' -o jsonpath='{.items[0].metadata.name}')
-   oc logs $GW_POD -n openshift-ingress --since=2m | grep "Task failed"
-   ```
-
-   If every `/v1/chat/completions` request is immediately preceded by a line like `kuadrant_wasm_shim: Task failed: Some("N")`, the gateway's rate-limiting Wasm filter is failing its async callout to Limitador on every request — token usage is never recorded, so the budget never depletes and `429` never fires. Confirmed reproducible on a completely fresh `maas-default-gateway` pod (i.e. not stale state) affecting **both** Granite and TinyLlama routes, on rhcl-operator v1.4.2. Restarting Limitador and the gateway does **not** clear it.
-
-   On the previously tested 3.4.3 / RHCL 1.4.2 environment, this indicated a platform bug in Kuadrant's Wasm rate-limiting shim, not something fixable via `MaaSSubscription`/`TokenRateLimitPolicy` changes. If you hit this, the token-budget and 429 behavior in the rest of this chapter cannot be demonstrated until an upstream fix or a newer `rhcl-operator` build is available — check `oc get subscription rhcl-operator -n kuadrant-system -o jsonpath='{.status.installedCSV}'` against the latest in your catalog. The built-in consumption and model performance dashboards can still be explored, but successful enforcement must be demonstrated with actual `429` responses; a dashboard alone does not prove enforcement.
-
-## Step 3: Show Consumption and Rejections in OpenShift AI
+## Step 3: Show consumption and rejections in OpenShift AI
 
 Return to the Usage view opened in Step 1. Keep the `limited-plan` subscription selected and leave **Model → All** when checking gateway rejection counts: the platform's rate-limited counter does not carry the same model label as its token counter.
 
@@ -256,7 +203,7 @@ After the test:
 
 *Example after the 100-token/minute test: `limited-plan` has **9** rate-limit rejections. This six-hour view includes preparation traffic, so its **21** total requests are not just the ten-request burst. The quota was restored to 1,000 tokens/minute after the test.*
 
-### HTTP 429 Works but Total Rate Limited Is Zero
+### HTTP 429 works but Total rate limited is zero
 
 The dashboard counts **increases between collected counter samples**, rather than displaying the cumulative rejection counter. If the first rejection creates a series at `1` and every subsequent scrape still sees `1`, `increase()` is `0`. This can also hide an entire first burst if all its rejections occur before the first scrape. Waiting longer or widening the time range cannot recover the missing initial increase.
 
@@ -269,7 +216,7 @@ For example, collected values of `1 → 10` show approximately nine new rejectio
 
 **The acceptance criteria are both:** curl demonstrates `HTTP:429` once the token budget is exhausted, and the built-in Usage dashboard shows nonzero token consumption and rate-limit rejections. Chapter 5's three subscription/model combinations should remain visible when the filters are cleared.
 
-### Optional: Check the Metrics Pipeline
+### Optional: Check the metrics pipeline
 
 For troubleshooting, query the AI monitoring stack used by Usage. This needs no extra dashboard, datasource, or OpenShift console plugin:
 
@@ -294,35 +241,13 @@ oc exec -n openshift-user-workload-monitoring sts/prometheus-user-workload -c pr
   | jq '.data.result'
 ```
 
-A positive cumulative count with zero increase matches the baseline case described above. No cumulative series after collection calls for checking the `limitador-metrics` ServiceMonitor and AI collector from Chapter 5. If the increase is positive but Usage stays at zero, check the dashboard filters and confirm `authorized_hits_total` has matching `user`, `subscription`, and `limitador_namespace` labels for successful traffic in the same period: the shipped dashboard joins rejection counts to those token-usage series to apply its Model filter.
+A positive cumulative count with zero increase matches the baseline case described above. No cumulative series after collection calls for checking the `limitador-metrics` ServiceMonitor and AI collector from [Configure observability](../chapter-3/observability.md). If the increase is positive but Usage stays at zero, check the dashboard filters and confirm `authorized_hits_total` has matching `user`, `subscription`, and `limitador_namespace` labels for successful traffic in the same period: the shipped dashboard joins rejection counts to those token-usage series to apply its Model filter.
 
-## Step 4: Explore Built-in Model Observability
+## Step 4: Restore the demo quota
 
-Stay in **OpenShift AI → Observe & monitor → Dashboard**. These views use the metrics stack installed in Chapter 5:
+Restore the quota even if the test fails or the session is interrupted. The budget change applies to every user of this subscription/model.
 
-| View | What to demonstrate |
-|---|---|
-| **Usage** | Token consumption by subscription/model, request counts, and rate-limit rejections |
-| **Models** | Model deployments, token throughput, request success rate, latency, and time to first token |
-| **LLM Traffic** | Request throughput, error rate, and token throughput for llm-d |
-| **LLM Performance** | Latency, time to first token, inter-token latency, and KV cache metrics |
-| **LLM Utilization** | GPU utilization, running requests, and waiting requests |
-
-Choose the `ai-models` project/namespace and relevant model where those filters are available. Generate a few successful requests after restoring the quota below, allow a scrape interval, and refresh. Rate-limited requests stop at the gateway, so model performance panels describe the requests that actually reached vLLM. A brief demo burst can leave rate charts sparse; choose a time range covering the traffic. A GPU panel also needs the GPU metrics exporter to be collected; an empty GPU panel does not invalidate the token-consumption or rate-limit demo.
-
-OpenShift AI 3.5 creates model PodMonitors automatically. If model metrics are absent, inspect the existing monitors and model pod labels before adding anything:
-
-```bash
-oc get podmonitor -n ai-models --show-labels
-oc get pods -n ai-models --show-labels
-oc get pods -n redhat-ods-monitoring
-```
-
-Do not add a second scrape of the same model to fix an empty chart; diagnose the existing monitor, collector, filters, and traffic first. For details, see [OpenShift AI observability](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/managing_openshift_ai/managing-observability_managing-rhoai).
-
-## Restore the Demo Quota
-
-Return TinyLlama to the Chapter 4 limit after testing:
+Return TinyLlama to the 1,000 tokens/minute demo limit after testing:
 
 ```bash
 oc patch maassubscription limited-plan -n models-as-a-service --type=json \
@@ -336,8 +261,48 @@ oc wait tokenratelimitpolicy/maas-trlp-tinyllama -n ai-models \
   --for=jsonpath='{.spec.limits.*.rates[0].limit}'=1000 --timeout=120s
 ```
 
-Wait for the one-minute budget window to reset before running more traffic.
+The traffic command in Step 5 first waits for the one-minute budget window to reset.
 
-## Revoke the Test API Keys
+## Step 5: Explore built-in model observability
 
-After finishing your demos, open **Gen AI studio → API keys** in OpenShift AI and revoke `department-a-test`, `department-b-test`, and any additional keys created during the walkthrough. Revoking keys preserves historical usage metrics.
+Stay in **OpenShift AI → Observe & monitor → Dashboard**. These views use the metrics stack from [Configure observability](../chapter-3/observability.md):
+
+| View | What to demonstrate |
+|---|---|
+| **Usage** | Token consumption by subscription/model, request counts, and rate-limit rejections |
+| **Models** | Model deployments, token throughput, request success rate, latency, and time to first token |
+| **LLM Traffic** | Request throughput, error rate, and token throughput for llm-d |
+| **LLM Performance** | Latency, time to first token, inter-token latency, and KV cache metrics |
+| **LLM Utilization** | GPU utilization, running requests, and waiting requests |
+
+Generate a few successful requests on both models with the restored quota:
+
+```bash
+sleep 65
+for i in $(seq 1 5); do
+  for model in granite-2b tinyllama; do
+    curl -sS --max-time 60 -o /dev/null -w "$model HTTP:%{http_code}\n" \
+      -X POST https://$ROUTE_HOST/ai-models/$model/v1/chat/completions \
+      -H "Authorization: Bearer $MAAS_API_KEY" \
+      -H 'Content-Type: application/json' \
+      -d "$(jq -n --arg model "$model" \
+        '{model:$model,messages:[{role:"user",content:"Name one benefit of Kubernetes."}],max_tokens:30}')"
+  done
+done
+```
+
+Expect `HTTP:200` for every request. Choose the `ai-models` project/namespace and relevant model where those filters are available, allow a scrape interval, and refresh. Rate-limited requests stop at the gateway, so model performance panels describe the requests that actually reached vLLM. A brief demo burst can leave rate charts sparse; choose a time range covering the traffic. A GPU panel also needs the GPU metrics exporter to be collected; an empty GPU panel does not invalidate the token-consumption or rate-limit demo.
+
+OpenShift AI 3.5 creates model PodMonitors automatically. If model metrics are absent, inspect the existing monitors and model pod labels before adding anything:
+
+```bash
+oc get podmonitor -n ai-models --show-labels
+oc get pods -n ai-models --show-labels
+oc get pods -n redhat-ods-monitoring
+```
+
+Do not add a second scrape of the same model to fix an empty chart; diagnose the existing monitor, collector, filters, and traffic first. For details, see [OpenShift AI observability](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/managing_openshift_ai/managing-observability_managing-rhoai).
+
+## Revoke the test API keys
+
+Once all exercises and presentations are finished, revoke both keys using the [key cleanup](../chapter-3/api-keys.md#cleanup) and confirm **403**. Historical usage metrics remain available.

@@ -1,84 +1,68 @@
-# Chapter 3: Deploying the First Model
+# Part 1 — Chapter 3: Finish model publishing and verify readiness
 
-With governance in place, it's time to deploy a model. You'll deploy **Granite 3.3 2B Instruct** into the `ai-models` namespace using the `LLMInferenceService` CRD (llm-d distributed inference).
+**Role:** cluster administrator. Complete Chapter 1's [model downloads](../chapter-1/README.md#start-the-model-downloads) and [Chapter 2](../chapter-2/README.md) first.
 
-Key points:
-- This tutorial uses `LLMInferenceService` with the MaaS gateway for governance; do not substitute a legacy `InferenceService` without configuring its MaaS integration
-- A `MaaSModelRef` resource registers the model with the MaaS gateway
-- Once the model is ready, the subscriptions and auth policies from Chapter 2 activate automatically
+This chapter finishes Part 1 in three pages. Work through them in order:
 
-## Before you deploy
+1. **This page:** register both models with MaaS, complete TinyLlama access, and wait for Ready.
+2. [Configure observability](observability.md): metrics stack, user labels, and the Usage dashboard.
+3. [Create demonstration API keys](api-keys.md): one key per department, used throughout Part 2.
 
-If you have not already done so in Chapter 1, free the GPU by scaling down the Demo Platform's default model:
+Run commands from the repository root.
+
+The manifests use `LLMInferenceService` with the MaaS Gateway, one GPU each, and `--enable-force-include-usage` so streamed responses also report token usage for rate limiting. Do not substitute a legacy `InferenceService` without MaaS integration.
+
+## Step 1: Register both models with MaaS
+
+Confirm both model services were submitted, then create their `MaaSModelRef` resources:
 
 ```bash
-oc scale deployment llama-32-3b-instruct-predictor -n my-first-model --replicas=0
+oc get llminferenceservice granite-2b tinyllama -n ai-models
+oc apply -f chapter-3/granite-maas-model-ref.yml \
+  -f chapter-3/tinyllama-maas-model-ref.yml
 ```
 
-If that deployment does not exist, skip this step.
+If either service is missing, return to [Start the model downloads](../chapter-1/README.md#start-the-model-downloads). Registration can reconcile while the backends are still initializing; readiness is checked below. Chapter 2's Granite subscriptions and authorization policies can now resolve their model reference.
 
-## Step 1: Create the Data Connection
+## Step 2: Complete the access matrix
 
-This stores the OCI registry location so the Dashboard can display the model:
+The updated manifests add TinyLlama to `limited-plan` and `limited-access`. Both resources must include the model: a subscription supplies its quota and an authorization policy permits gateway access.
+
+| Department | Subscription | Granite tokens/min per user | TinyLlama tokens/min per user |
+|---|---|---|---|
+| `department-a` | `standard-plan` | 50,000 | No access |
+| `department-b` | `limited-plan` | 2,000 | 1,000 |
 
 ```bash
-oc apply -f chapter-3/granite-data-connection.yml
+oc apply -f chapter-3/subscriptions-updated.yml
+oc apply -f chapter-3/auth-policies-updated.yml
 ```
 
-## Step 2: Deploy the Model
+## Step 3: Wait for readiness
 
-The vLLM args include `--enable-force-include-usage`, so token usage is always reported for MaaS rate limiting (see [KNOWN-ISSUES.md](../KNOWN-ISSUES.md)).
-
-The model manifests request one `nvidia.com/gpu` directly. They do not depend on a Demo Platform hardware profile named `gpu-profile`.
+Wait for image pulls and initialization if they did not finish during Chapter 2:
 
 ```bash
-oc apply -f chapter-3/granite-inference-service.yml
-```
-
-## Step 3: Register with MaaS
-
-The `MaaSModelRef` links the model to the MaaS gateway, enabling subscription-based access control:
-
-```bash
-oc apply -f chapter-3/granite-maas-model-ref.yml
-```
-
-## Step 4: Wait for Deployment
-
-The model takes a few minutes to pull weights and initialize. Wait for readiness:
-
-```bash
-oc wait llminferenceservice/granite-2b -n ai-models --for=condition=Ready --timeout=1200s
-oc wait maasmodelref/granite-2b -n ai-models --for=condition=Ready --timeout=300s
-```
-
-On timeout, inspect `oc get pods -n ai-models` and `oc get events -n ai-models --sort-by=.lastTimestamp`. `Pending` can indicate insufficient GPU/CPU/memory; `ImagePullBackOff` indicates registry access or pull credentials. Stop here until both resources are ready. For continuous status, use `oc get llminferenceservice -n ai-models -w` and press Ctrl+C to stop watching.
-
-You can also watch in the OpenShift AI Dashboard under **AI Hub → Models → Deployments** in the `ai-models` project.
-
-## Step 5: Verify
-
-Check the model is registered with MaaS:
-
-```bash
+oc wait llminferenceservice/granite-2b llminferenceservice/tinyllama \
+  -n ai-models --for=condition=Ready --timeout=1200s
+oc wait maasmodelref/granite-2b maasmodelref/tinyllama \
+  -n ai-models --for=condition=Ready --timeout=300s
+oc wait maassubscription/standard-plan maassubscription/limited-plan \
+  maasauthpolicy/standard-access maasauthpolicy/limited-access \
+  -n models-as-a-service --for=condition=Ready --timeout=300s
+oc get llminferenceservice -n ai-models
 oc get maasmodelref -n ai-models
 ```
 
-Expected output:
-
-```
-NAME         PHASE   ENDPOINT         HTTPROUTE       GATEWAY           AGE
-granite-2b   Ready   http://maas...   granite-2b...   maas-default...   5m
-```
-
-Check that subscriptions are now active:
+Expected: both services, both model references, and every governance wait succeed. On timeout:
 
 ```bash
-oc get maassubscription -n models-as-a-service
-oc wait maassubscription/standard-plan maassubscription/limited-plan \
-  -n models-as-a-service --for=condition=Ready --timeout=300s
-oc wait maasauthpolicy/standard-access maasauthpolicy/limited-access \
-  -n models-as-a-service --for=condition=Ready --timeout=300s
+oc get pods -n ai-models
+oc get events -n ai-models --sort-by=.lastTimestamp
 ```
 
-Proceed to [Chapter 4](../chapter-4/README.md).
+`Pending` often means insufficient GPU/CPU/memory. `ImagePullBackOff` is registry or pull-credential failure. Stop until the checks pass.
+
+You can also watch **AI Hub → Models → Deployments** in `ai-models`.
+
+Continue to page 2: [Configure observability](observability.md).

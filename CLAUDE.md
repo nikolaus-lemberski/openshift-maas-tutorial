@@ -5,15 +5,18 @@ A step-by-step tutorial for setting up a governed AI platform on OpenShift AI us
 ## Project structure
 
 ```
-chapter-1/   Infrastructure setup (operators, gateway, database, MaaS API)
-chapter-2/   Governance (groups, subscriptions, auth policies)
-chapter-3/   Model deployment (Granite 2B via LLMInferenceService)
-chapter-4/   API access & multi-model (API keys, TinyLlama, selective access)
-chapter-5/   Usage & showback (embedded OpenShift AI dashboard, Technology Preview)
-chapter-6/   Observability & rate limiting (HTTP 429s, consumption, built-in AI dashboards)
+Part 1: Install and configure (administrator)
+chapter-1/   Base infrastructure and early model start; check-prereqs.sh before install
+chapter-2/   Groups and initial governance
+chapter-3/   Register both models, complete governance, wait for readiness; then observability.md and api-keys.md
+
+Part 2: Use MaaS (administrator as both departments)
+chapter-4/   Discovery, inference, and selective access with the two demonstration keys
+chapter-5/   AI ops usage/showback (Technology Preview); no installation
+chapter-6/   AI ops quota tuning, HTTP 429s, and model observability
 ```
 
-Each chapter has a `README.md` with prose + copy-pasteable commands and numbered YAML manifests applied in order.
+Each chapter has a `README.md` with prose and copy-pasteable commands. Follow the root README reading order. YAML lives in the chapter that applies it: Chapter 1 owns model connections/services and observability operators; Chapter 2 owns initial governance; Chapter 3 owns both MaaSModelRefs and the TinyLlama governance updates. Observability operators stay in `chapter-1/` YAML and are applied from `chapter-3/observability.md`. Part 2 chapters are README-only. The default walkthrough uses the logged-in administrator as both departments. Chapter 4 uses the two keys from `chapter-3/api-keys.md` and does not change groups or deploy resources.
 
 ## Writing conventions
 
